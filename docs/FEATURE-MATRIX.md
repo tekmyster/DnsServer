@@ -2,10 +2,12 @@
 
 This is a developing open-source DDI fork. Features have no paid software tier, but a working feature is not a claim of production parity or superior detection accuracy versus Infoblox, EfficientIP or BlueCat. The table separates current functionality from the remaining product requirements.
 
+**Production blocker found in the [automatic failover lab](AUTOMATIC-FAILOVER-TEST.md):** abrupt Linux VM power loss restored an acknowledged DHCP lease as an Offer. Automatic ownership takeover and cluster promotion also remain unimplemented. New-client continuity does not satisfy full automatic HA requirements.
+
 | Requested capability | Current behavior | Remaining requirements |
 | --- | --- | --- |
 | Technitium fork and baseline | Upstream engines retained; repeatable Release build; fork and draft PR | Packaging, upgrades, compatibility and production qualification |
-| Multi-server DHCP allocation | Balanced disjoint scattered sequences, stable identities, exclusions, initial reservations, durable offers/ACKs | Live membership/range/reservation migration and controller consensus |
+| Multi-server DHCP allocation | Balanced disjoint scattered sequences, stable identities, exclusions, initial reservations, flushed offer/ACK journals; Linux power-loss durability failed qualification | Repair acknowledged-lease crash durability; live membership/range/reservation migration and controller consensus |
 | More than two synchronized servers | All enrolled peers exchange sequenced snapshots over HTTPS; revisioned scope options reconcile from the primary; reachable peers continue during coordinator outage; three live local servers validated | Regional deployment, enrollment/DANE and scale qualification |
 | Disconnected service | Owners use their unchanged sequences and previously granted capacity | Safe recovery tooling, clock-bound qualification and physical fencing |
 | Overflow after own sequence | Donor checks authoritative state and persists a permanent exclusive grant before borrower offers | Grant return/reclamation and bounded idempotent retry across unknown HTTP outcomes |
@@ -25,3 +27,5 @@ Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-ddi.ps1` a
 Automatic ownership takeover depends on a configured fencing platform. Planned handoff requires the current owner's durable surrender; an unreachable owner still requires manual recovery and verified fencing.
 
 The [two-VM local Hyper-V lab](HYPERV-LAB.md) additionally exercised native Linux cluster enrollment and peer certificate handling, synchronized UDP/TCP DNS, real broadcast DHCP OFFER/ACK exchanges, shared lease-attributed security signals, IPAM inventory synchronization, and service-outage/restart recovery. Both services remain available for local testing. This does not qualify simultaneous network partitions, automatic fenced takeover, WAN deployments, or production scale.
+
+The subsequent [automatic failover tests](AUTOMATIC-FAILOVER-TEST.md) exercised first-offer DHCP selection and OS resolver fallback during a service outage and abrupt primary VM power loss, preference after recovery, and allocations during a short peer-link partition. They exposed the crash-durability blocker above. The dedicated failed-test scope is disabled; no production service was modified.

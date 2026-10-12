@@ -1,6 +1,40 @@
 # DDI security module requirements
 
-Provide protective DNS, threat intelligence enrichment, behavioral analytics, and device attribution as open source capabilities without paid software feature gates. Threat intelligence integrations are optional, and the resolver must remain usable without a commercial feed or reachable enrichment service. This module is specified here; the new analytics and MISP connector are not yet implemented.
+Provide protective DNS, threat intelligence enrichment, behavioral analytics, and device attribution as open source capabilities without paid software feature gates. Threat intelligence integrations are optional, and the resolver must remain usable without a commercial feed or reachable enrichment service. The first implementation now provides threat matching, a background MISP connector, heuristic scoring, shared DNS/DHCP device signals, IPAM threat findings, authenticated APIs, and a Security console. Advanced detections and regional deployment validation remain work in progress.
+
+## Implemented first slice
+
+Security is disabled by default, with Monitor as its initial mode. Explicit local indicators support exact domains, domain suffixes, IPv4/IPv6 addresses and networks, source confidence, client network scope, and expiry. Queries and reachable CNAME/A/AAAA answers are inspected; unrelated additional-section glue is ignored. URL values are retained as evidence without blocking a host based on an unseen URL path. Block responses use REFUSED, clear the AD bit, and preserve the client's checking-disabled flag. Locally authoritative answers are excluded unless the operator enables inspection.
+
+The Security tab exposes policy settings, bulk indicator entry, exceptions, simulation, recent events, source health, and shared device evidence. IPAM inspection also reports threat intelligence matches against intended and observed addresses. Policy writes require an expected revision and existing Settings modify permission. MISP source and credential-reference changes additionally require Administration modify permission. Credential references are restricted to `DDI_MISP_*_API_KEY` environment variables, including the default `DDI_MISP_API_KEY`; keys are never saved in a policy or returned through the console.
+
+The MISP worker makes bounded, authenticated HTTPS `attributes/restSearch` requests with pagination. It imports permitted domain, hostname, destination IP, domain/IP composite, and URL attributes, preserving attribute UUID, event ID, tags, timestamp, and `to_ids` metadata. Deleted attributes are excluded, successful full refresh replaces the cache to apply retractions, and failed refresh retains the previous complete cache. Enrichment is always Monitor evidence and is bound to its configured source URL. Cache lifetime is configurable; indicator age, sightings, decay scoring, warninglists, and additional sharing-tag policy interpretation are not yet implemented. MISP API visibility is governed by its service token. No DNS query is sent to MISP for live enrichment, and no sightings are submitted.
+
+The heuristic scorer groups by an observed device identity when unambiguous current DHCP evidence is available, otherwise by client IP, and by registrable domain using the bundled Public Suffix List. It uses a five-minute window and requires at least 30 samples before assigning points. Contributions cover long labels, entropy, distinct subdomains, volume, TXT ratio, and NXDOMAIN ratio. Scores remain uncalibrated; synthetic regression examples do not establish production precision or recall. Historical lease attribution, learned baselines, long-window analysis, and validated DGA classification are not implemented.
+
+## Shared DNS and DHCP awareness
+
+DNS, DHCP, and IPAM use the same local security manager. A DNS indicator match or qualifying behavioral alert creates an expiring device signal when current lease identity is known. MISP matches can create lower-priority shared context without triggering automatic enforcement. DHCP reads those signals before offering a new lease and records its related evidence. A simple per-identity DHCP offer-request-rate anomaly can also publish a signal that DNS sees. MAC addresses and DHCP client identifiers are observations, not authenticated identity.
+
+Device responses default to Monitor for DNS and Observe for DHCP. In Block mode, operators may enable device DNS blocking and withholding new DHCP leases above a configured threshold. Existing active lease renewals are preserved by this initial response mode. Signals expire after ten minutes. Indicator-derived signals carry evidence fingerprints, so changing, removing, expiring, or retracting the underlying indicator prevents obsolete evidence from driving restrictions. This mechanism does not transfer address ownership or modify ACLs, credentials, or management firewall rules.
+
+Nodes checkpoint local signals every ten seconds and on orderly shutdown, and retry publication after a failed link. A sudden crash can lose observations since the last checkpoint. Secondary nodes submit batches over HTTPS through the existing cluster API session to a coordinator endpoint that requires a direct cluster API token and registered source nodes; ordinary proxied user sessions cannot ingest evidence. The coordinator deduplicates by stable signal ID and timestamp, stores the received signal, and requests distribution through existing cluster configuration synchronization. Policy, MISP cache, and active signals participate in configuration backup/restore and transfer. Receipt by the coordinator does not prove every replica has converged; the console describes asynchronous distribution. Signals received before their matching indicator snapshot cannot drive indicator-based restrictions until that evidence becomes valid locally.
+
+The stores are bounded to 4096 signals, 4096 behavioral windows, a 2048-event delivery queue, and 1000 recent in-memory events. Local JSONL delivery is capped at approximately 10 MiB per UTC day with seven-day retention. Source and delivery health, retry errors, and dropped event delivery counts are visible. Queue limits and retention need workload testing before enterprise rollout. The existing cluster token model trusts cluster members; per-node signed evidence and finer security roles remain future work.
+
+## API contract
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/security/policy/get` | GET or POST | Policy, MISP health, distribution health, dropped deliveries, active signals |
+| `/api/security/policy/set` | POST | Form fields `revision` and serialized `policy`; validate and publish a local snapshot |
+| `/api/security/events/list` | GET or POST | Recent node-local DNS/DHCP events and shared active signals |
+| `/api/security/simulate` | GET or POST | `query`, optional `client`, comma-separated `cnames` and `addresses`; no enforcement or event mutation |
+| `/api/security/signals/ingest` | POST | Coordinator-only authenticated cluster ingestion of a bounded serialized `signals` batch |
+
+## Current validation and limits
+
+Run `dotnet run --project tests/Ipam.Tests/Ipam.Tests.csproj -c Release -- --security` for security matching, scoring, three independent stores, mocked MISP, and bad-link retry checks. Run with `-- --api` for authenticated APIs, live loopback DNS packets, the actual DHCP offer hook, IPAM findings, permissions, backup format, and fresh-session privilege validation. These tests do not constitute a live three-node regional cluster, an end-to-end DHCP relay/failover exercise, a production MISP deployment, an encrypted-transport matrix, or detection calibration. Historical lease context, external threat-feed schedulers beyond MISP, SVCB/HTTPS hints, sinkholes, advanced analytics, SIEM exporters, and durable investigation search remain pending.
 
 ## Threat intelligence and enforcement
 

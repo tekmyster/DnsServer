@@ -134,6 +134,17 @@ namespace DnsServerCore
                 Write(context, "subnet", subnet);
                 Write(context, "observations", observations);
                 Write(context, "findings", _service._ipam.Reconcile(subnetId, observations));
+                var assets = state.Assignments.Where(a => a.SubnetId == subnetId).Select(a => (a.Address, a.HostName, Source: "IPAM intent"))
+                    .Concat(observations.Select(o => (o.Address, o.HostName, Source: o.Source))).Distinct().ToArray();
+                var securityFindings = new List<object>();
+                foreach (var asset in assets)
+                {
+                    Security.SecurityDecision decision;
+                    try { decision = _service._security.Evaluate(IPAddress.Parse(asset.Address), asset.HostName, [], [IPAddress.Parse(asset.Address)]); }
+                    catch (ArgumentException) { decision = _service._security.Evaluate(IPAddress.Parse(asset.Address), null, [], [IPAddress.Parse(asset.Address)]); }
+                    if (decision.Matches.Any(i => i.Action != "Allow")) securityFindings.Add(new { address = asset.Address, source = asset.Source, action = decision.Action, reason = decision.Reason, indicators = decision.Matches.Select(i => i.Value).ToArray() });
+                }
+                Write(context, "securityFindings", securityFindings);
                 Write(context, "utilization", new { usableAddresses = network.Capacity.ToString(), intendedAddresses = intended.Length, observedAddresses = observations.Select(o => o.Address).Distinct().Count(), knownUsedAddresses = used });
             }
 

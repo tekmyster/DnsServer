@@ -1,0 +1,71 @@
+using DnsServerCore.Auth;
+using DnsServerCore.Cluster;
+using DnsServerCore.Security;
+using Microsoft.AspNetCore.Http;
+using System;
+using System.Linq;
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using TechnitiumLibrary;
+
+namespace DnsServerCore
+{
+    public partial class DnsWebService
+    {
+        sealed class WebServiceSecurityApi
+        {
+            readonly DnsWebService _service;
+            public WebServiceSecurityApi(DnsWebService service) { _service = service; }
+            User Authorize(HttpContext context, PermissionFlag flag)
+            {
+                User user = _service.GetSessionUser(context);
+                if (!_service._authManager.IsPermitted(PermissionSection.Settings, user, flag)) throw new DnsWebServiceException("Access was denied.");
+                if (flag != PermissionFlag.View && _service._clusterManager.ClusterInitialized && _service._clusterManager.GetSelfNode().Type != ClusterNodeType.Primary) throw new DnsWebServiceException("Security policy changes must be made on the cluster primary.");
+                return user;
+            }
+            static void Write(HttpContext context, string name, object value)
+            { var writer = context.GetCurrentJsonWriter(); writer.WritePropertyName(name); JsonSerializer.Serialize(writer, value, value.GetType(), DdiSecurityManager.JsonOptions); }
+            public void GetPolicy(HttpContext context)
+            {
+                Authorize(context, PermissionFlag.View); Write(context, "policy", _service._security.Policy);
+                Write(context, "mispHealth", _service._security.MispStatus); Write(context, "droppedEvents", _service._security.DroppedEvents);
+                Write(context, "signalHealth", _service._security.SignalStatus);
+                Write(context, "signals", _service._security.Signals());
+            }
+            public void SetPolicy(HttpContext context)
+            {
+                User user = Authorize(context, PermissionFlag.Modify);
+                string json = context.Request.GetQueryOrForm("policy");
+                if (Encoding.UTF8.GetByteCount(json) > 2 * 1024 * 1024) throw new ArgumentException("Security policy exceeds 2 MiB.");
+                var policy = JsonSerializer.Deserialize<SecurityPolicy>(json, DdiSecurityManager.JsonOptions) ?? throw new ArgumentException("Missing security policy.");
+                if (policy.Misp != _service._security.Policy.Misp && !_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to configure MISP sources and credential references.");
+                _service._security.SetPolicy(policy, long.Parse(context.Request.GetQueryOrForm("revision")));
+                _service._log.Write(_service.GetRemoteEndPoint(context), "[" + user.Username + "] DDI security policy updated to revision " + _service._security.Policy.Revision);
+                if (_service._clusterManager.ClusterInitialized) _service._clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
+                Write(context, "policy", _service._security.Policy);
+            }
+            public void Events(HttpContext context)
+            {
+                Authorize(context, PermissionFlag.View); Write(context, "events", _service._security.RecentEvents()); Write(context, "signals", _service._security.Signals());
+            }
+            public void Simulate(HttpContext context)
+            {
+                Authorize(context, PermissionFlag.View); var request = context.Request;
+                string[] cnames = request.GetQueryOrForm("cnames", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                string[] addresses = request.GetQueryOrForm("addresses", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                Write(context, "decision", _service._security.Evaluate(IPAddress.Parse(request.GetQueryOrForm("client", "127.0.0.1")), request.GetQueryOrForm("query"), cnames, addresses.Select(IPAddress.Parse)));
+            }
+            public void IngestSignals(HttpContext context)
+            {
+                if (!_service._clusterManager.ClusterInitialized || context.GetCurrentSession().Type != UserSessionType.ClusterApiToken || _service._clusterManager.GetSelfNode().Type != ClusterNodeType.Primary || !context.Request.IsHttps || context.Request.QueryOrForm("actingUser") is not null) throw new DnsWebServiceException("A direct HTTPS cluster API session on the primary is required; proxied user sessions cannot ingest signals.");
+                string payload = context.Request.GetQueryOrForm("signals");
+                if (Encoding.UTF8.GetByteCount(payload) > 2 * 1024 * 1024) throw new ArgumentException("Signal batch exceeds 2 MiB.");
+                SecuritySignal[] signals = JsonSerializer.Deserialize<SecuritySignal[]>(payload, DdiSecurityManager.JsonOptions) ?? throw new ArgumentException("Missing signals.");
+                foreach (var signal in signals)
+                    if (signal is null || !_service._clusterManager.TryGetClusterNode(signal.Node, out _)) throw new ArgumentException("Signal source is not a registered cluster node.");
+                Write(context, "accepted", _service._security.MergeSignals(signals));
+            }
+        }
+    }
+}

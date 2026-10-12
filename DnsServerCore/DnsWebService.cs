@@ -91,6 +91,11 @@ namespace DnsServerCore
         readonly WebServiceDhcpApi _dhcpApi;
         readonly WebServiceIpamApi _ipamApi;
         readonly DnsServerCore.Ipam.IpamManager _ipam;
+        readonly Security.DdiSecurityManager _security;
+        readonly WebServiceSecurityApi _securityApi;
+        readonly object _securityDeviceLock = new object();
+        readonly Dictionary<IPAddress, (Scope Scope, Lease Lease, Security.SecurityDevice Device)> _securityDevices = new();
+        DateTime _securityDeviceCacheUntil;
         readonly WebServiceAuthApi _authApi;
         readonly WebServiceClusterApi _clusterApi;
         readonly WebServiceLogsApi _logsApi;
@@ -187,6 +192,9 @@ namespace DnsServerCore
             _dhcpApi = new WebServiceDhcpApi(this);
             _ipam = new DnsServerCore.Ipam.IpamManager(Path.Combine(_configFolder, "ipam.json"));
             _ipamApi = new WebServiceIpamApi(this);
+            string suffixFile = Path.Combine(_appFolder, "Security", "public_suffix_list.dat");
+            _security = new Security.DdiSecurityManager(_configFolder, new Security.PublicSuffixes(File.ReadLines(suffixFile)));
+            _securityApi = new WebServiceSecurityApi(this);
             _authApi = new WebServiceAuthApi(this);
             _clusterApi = new WebServiceClusterApi(this);
             _logsApi = new WebServiceLogsApi(this);
@@ -249,6 +257,8 @@ namespace DnsServerCore
             }
 
             await StopAsync();
+
+            await _security.DisposeAsync();
 
             _authManager?.Dispose();
 
@@ -701,6 +711,12 @@ namespace DnsServerCore
                         byte[] inventory = _ipam.Export();
                         ipamStream.Write(inventory, 0, inventory.Length);
                     }
+                    using (Stream policyStream = backupZip.CreateEntry("security.json").Open())
+                    { byte[] policy = _security.ExportPolicy(); policyStream.Write(policy, 0, policy.Length); }
+                    using (Stream signalsStream = backupZip.CreateEntry("security-signals.json").Open())
+                    { byte[] signals = _security.ExportSignals(); signalsStream.Write(signals, 0, signals.Length); }
+                    using (Stream enrichmentStream = backupZip.CreateEntry("security-misp.json").Open())
+                    { byte[] enrichment = _security.ExportEnrichment(); enrichmentStream.Write(enrichment, 0, enrichment.Length); }
                     string dnsConfigFile = Path.Combine(_configFolder, "dns.config");
 
                     if (File.Exists(dnsConfigFile) && (File.GetLastWriteTimeUtc(dnsConfigFile) > ifModifiedSince))
@@ -1063,6 +1079,15 @@ namespace DnsServerCore
 
                     if (dnsSettings)
                     {
+                        ZipArchiveEntry securityEntry = backupZip.GetEntry("security.json");
+                        if (securityEntry is not null)
+                        { using Stream source = securityEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _security.RestorePolicy(bytes.ToArray()); }
+                        ZipArchiveEntry enrichmentEntry = backupZip.GetEntry("security-misp.json");
+                        if (enrichmentEntry is not null)
+                        { using Stream source = enrichmentEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _security.RestoreEnrichment(bytes.ToArray()); }
+                        ZipArchiveEntry signalsEntry = backupZip.GetEntry("security-signals.json");
+                        if (signalsEntry is not null)
+                        { using Stream source = signalsEntry.Open(); var signals = System.Text.Json.JsonSerializer.Deserialize<Security.SecuritySignal[]>(source, Security.DdiSecurityManager.JsonOptions); _security.MergeSignals(signals, false); }
                         ZipArchiveEntry ipamEntry = backupZip.GetEntry("ipam.json");
                         if (ipamEntry is not null)
                         {
@@ -2228,6 +2253,12 @@ namespace DnsServerCore
             _webService.MapPost("/api/ipam/assignments/set", _ipamApi.SetAssignment);
             _webService.MapPost("/api/ipam/delete", _ipamApi.Delete);
 
+            _webService.MapGetAndPost("/api/security/policy/get", _securityApi.GetPolicy);
+            _webService.MapPost("/api/security/policy/set", _securityApi.SetPolicy);
+            _webService.MapGetAndPost("/api/security/events/list", _securityApi.Events);
+            _webService.MapGetAndPost("/api/security/simulate", _securityApi.Simulate);
+            _webService.MapPost("/api/security/signals/ingest", _securityApi.IngestSignals);
+
             //dhcp
             _webService.MapGetAndPost("/api/dhcp/leases/list", _dhcpApi.ListDhcpLeases);
             _webService.MapGetAndPost("/api/dhcp/leases/remove", _dhcpApi.RemoveDhcpLease);
@@ -2349,6 +2380,7 @@ namespace DnsServerCore
                 case "/api/user/logout":
                 case "/api/user/session/get":
                 case "/api/user/session/delete":
+                case "/api/security/signals/ingest":
                     return ClusterNodeType.Secondary; //this api must be called on current node
 
                 default:
@@ -2935,9 +2967,22 @@ namespace DnsServerCore
             {
                 //init dns server
                 _dnsServer = new DnsServer(_configFolder, Path.Combine(_appFolder, "dohwww"), _log);
+                _dnsServer.SecurityManager = _security;
 
                 //init dhcp server
                 _dhcpServer = new DhcpServer(Path.Combine(_configFolder, "scopes"), _log);
+                _dhcpServer.SecurityManager = _security;
+                _security.NodeName = () => _clusterManager?.ClusterInitialized == true ? _clusterManager.GetSelfNode().Name : _dnsServer.ServerDomain;
+                _security.DeviceResolver = ResolveSecurityDevice;
+                _security.DeviceContextChanged = () => { lock (_securityDeviceLock) _securityDeviceCacheUntil = DateTime.MinValue; };
+                _security.SharedStateChanged = () => { if (_clusterManager.ClusterInitialized) _clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode(); };
+                _security.PublicationDescription = () => !_clusterManager.ClusterInitialized ? "Standalone: DNS and DHCP share local signals" : _clusterManager.GetSelfNode().Type == ClusterNodeType.Primary ? "Stored on coordinator; cluster configuration distribution requested" : "Coordinator acknowledged signal publication; replica convergence is asynchronous";
+                _security.PublishSignals = async (signals, cancellationToken) =>
+                {
+                    if (!_clusterManager.ClusterInitialized) return;
+                    if (_clusterManager.GetSelfNode().Type == ClusterNodeType.Primary) _clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
+                    else await _clusterManager.GetPrimaryNode().PushSecuritySignalsAsync(System.Text.Json.JsonSerializer.Serialize(signals, Security.DdiSecurityManager.JsonOptions), cancellationToken);
+                };
                 _dhcpServer.DnsServer = _dnsServer;
                 _dhcpServer.AuthManager = _authManager;
 
@@ -3000,6 +3045,7 @@ namespace DnsServerCore
                 //start dns and dhcp
                 await _dnsServer.StartAsync(throwIfBindFails);
                 _dhcpServer.Start();
+                _security.Start();
 
                 _log.Write("DNS Server (v" + _currentVersion.ToString() + ") was started successfully.");
                 _isRunning = true;
@@ -3044,6 +3090,32 @@ namespace DnsServerCore
         #endregion
 
         #region properties
+
+        Security.SecurityDevice ResolveSecurityDevice(IPAddress address)
+        {
+            lock (_securityDeviceLock)
+            {
+                DateTime now = DateTime.UtcNow;
+                if (_securityDeviceCacheUntil <= now)
+                {
+                    _securityDevices.Clear(); HashSet<IPAddress> ambiguous = [];
+                    var subnets = _ipam.GetSubnets();
+                    foreach (var scope in _dhcpServer.Scopes.Values)
+                    {
+                        var subnet = Array.Find(subnets, s => string.Equals(s.DhcpScope, scope.Name, StringComparison.OrdinalIgnoreCase));
+                        foreach (var lease in scope.Leases.Values)
+                            if (lease.LeaseExpires > now && !ambiguous.Contains(lease.Address))
+                            {
+                                if (_securityDevices.ContainsKey(lease.Address)) { _securityDevices.Remove(lease.Address); ambiguous.Add(lease.Address); continue; }
+                                _securityDevices[lease.Address] = (scope, lease, new(scope.Name, lease.ClientIdentifier.ToString(), BitConverter.ToString(lease.HardwareAddress), lease.HostName, subnet?.ViewId ?? "", subnet?.Site ?? "", subnet?.Vlan));
+                            }
+                    }
+                    _securityDeviceCacheUntil = now.AddSeconds(1);
+                }
+                if (_securityDevices.TryGetValue(address, out var context) && context.Lease.LeaseExpires > now && context.Scope.Leases.TryGetValue(context.Lease.ClientIdentifier, out var active) && ReferenceEquals(context.Lease, active)) return context.Device;
+                return null;
+            }
+        }
 
         public DnsServer DnsServer
         { get { return _dnsServer; } }

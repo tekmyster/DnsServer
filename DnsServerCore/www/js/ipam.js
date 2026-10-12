@@ -95,6 +95,9 @@ function inspectIpam() {
         data.findings.forEach(function (f) { findings.append($('<li>').text(f.address + ' — ' + f.kind + ': ' + f.detail)); });
         if (!data.findings.length) findings.append($('<li>').text('No reconciliation findings.'));
         output.append(findings);
+        var threats = $('<ul>');
+        (data.securityFindings || []).forEach(function (f) { threats.append($('<li>').text(f.address + ' — ' + f.action + ' — ' + f.source + ' — ' + f.reason + ' Indicators: ' + f.indicators.join(', '))); });
+        if ((data.securityFindings || []).length) output.append($('<h4>').text('Threat intelligence matches')).append(threats);
         var observations = $('<ul>');
         data.observations.forEach(function (o) { observations.append($('<li>').text(o.address + ' — ' + o.source + ' — ' + (o.hostName || '') + ' — ' + (o.clientIdentifier || ''))); });
         output.append($('<h4>').text('DNS and DHCP observations')).append(observations);

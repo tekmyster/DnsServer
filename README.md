@@ -21,7 +21,9 @@ Be it a home network or an organization's network, having a locally running DNS 
 
 This fork is developing an open source DDI platform with IPAM as a network source of truth, multi-node DHCP synchronization, and DNS security capabilities without paid software feature tiers. The upstream DNS and DHCP engines remain the foundation.
 
-The first IPAM slice adds a persisted IPv4/IPv6 inventory, network views, prefix containers, assignments, a console tab, authenticated APIs, and reconciliation with explicitly linked DNS zones and DHCP scopes. Full service provisioning, NetBox synchronization, distributed DHCP allocation, discovery, and behavioral security analytics remain under development. See the [architecture](docs/DDI-ARCHITECTURE.md), [IPAM implementation](docs/IPAM.md), [DHCP synchronization design](docs/DHCP-SYNCHRONIZATION.md), and [security requirements](docs/DDI-SECURITY.md) for scope and validation.
+The first IPAM slice adds a persisted IPv4/IPv6 inventory, network views, prefix containers, assignments, a console tab, authenticated APIs, and reconciliation with explicitly linked DNS zones and DHCP scopes. The first security slice adds domain/CNAME and resolved-IP threat matching, asynchronous MISP enrichment, uncalibrated behavioral scoring, a Security console, and expiring device evidence shared by DNS, DHCP, and IPAM. Security is disabled by default; enforcement and device responses are explicit policy choices.
+
+Full service provisioning, NetBox synchronization, distributed DHCP allocation, discovery, advanced security analytics, production calibration, and live regional-cluster validation remain under development. See the [architecture](docs/DDI-ARCHITECTURE.md), [IPAM implementation](docs/IPAM.md), [DHCP synchronization design](docs/DHCP-SYNCHRONIZATION.md), and [security implementation and requirements](docs/DDI-SECURITY.md) for scope and validation. Third-party data attribution is recorded in [third party notices](THIRD-PARTY-NOTICES.md).
 
 # Sponsored By
 <p align="center">

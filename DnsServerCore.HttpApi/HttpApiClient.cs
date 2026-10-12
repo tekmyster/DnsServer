@@ -530,6 +530,17 @@ namespace DnsServerCore.HttpApi
             CheckResponseStatus(rootElement);
         }
 
+        public async Task PushSecuritySignalsAsync(string signals, CancellationToken cancellationToken = default)
+        {
+            if (!_loggedIn) throw new HttpApiClientException("No active cluster session.");
+            if (_serverUrl.Scheme != "https") throw new HttpApiClientException("Security signal distribution requires HTTPS.");
+            using FormUrlEncodedContent content = new(new Dictionary<string, string> { ["signals"] = signals });
+            using HttpResponseMessage response = await _httpClient.PostAsync("api/security/signals/ingest", content, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            using JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+            CheckResponseStatus(json.RootElement);
+        }
+
         public async Task ProxyRequest(HttpContext context, string actingUsername, CancellationToken cancellationToken = default)
         {
             if (!_loggedIn)

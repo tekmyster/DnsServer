@@ -4,6 +4,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text.Json;
+using DnsServerCore.Security;
+using TechnitiumLibrary.Net.Dns;
+using TechnitiumLibrary.Net.Dns.ResourceRecords;
 
 static class ApiChecks
 {
@@ -109,7 +112,81 @@ static class ApiChecks
             Check((await Call(reader, "/api/ipam/list")).GetProperty("status").GetString() == "error", "IPAM inventory leaked to user without Settings access");
             Check((await Call(reader, "/api/ipam/views/set", ("revision", "5"), ("name", "Forbidden"))).GetProperty("status").GetString() == "error", "Unauthorized IPAM modification allowed");
             Check((await Call(fresh, "/api/ipam/list")).GetProperty("status").GetString() == "ok", "Fresh admin access lost after lab changes");
-            Console.WriteLine($"PASS: {checks} authenticated IPAM API checks; both sessions use loopback source; fresh read and modify verified.");
+            var securityGet = await Call(original, "/api/security/policy/get");
+            Check(securityGet.GetProperty("status").GetString() == "ok" && !securityGet.GetProperty("response").GetProperty("policy").GetProperty("enabled").GetBoolean(), "Security default changes existing DNS behavior");
+            Check((await Call(reader, "/api/security/policy/get")).GetProperty("status").GetString() == "error", "Security evidence leaked to unauthorized user");
+            var securityPolicy = SecurityPolicy.Default with { Enabled = true, InspectAuthoritative = true, Indicators = [new("ip-rule", "Network", "203.0.113.0/24", "Block", "Local lab"), new("domain-rule", "Domain", "badname.example", "Block", "Local lab")] };
+            string SerializePolicy(SecurityPolicy p) => JsonSerializer.Serialize(p, DdiSecurityManager.JsonOptions);
+            var securitySet = await Call(original, "/api/security/policy/set", ("revision", "0"), ("policy", SerializePolicy(securityPolicy)));
+            Check(securitySet.GetProperty("status").GetString() == "ok", "Security policy API failed: " + securitySet);
+            var simulation = await Call(original, "/api/security/simulate", ("query", "ordinary.example"), ("addresses", "203.0.113.9"));
+            Check(simulation.GetProperty("response").GetProperty("decision").GetProperty("action").GetString() == "Monitor", "Simulation ignores monitor mode");
+            service.DnsServer.AuthZoneManager.SetRecords("example", [new DnsResourceRecord("badip.example", DnsResourceRecordType.A, DnsClass.IN, 60, new DnsARecordData(IPAddress.Parse("203.0.113.9")))]);
+            service.DnsServer.AuthZoneManager.SetRecords("example", [new DnsResourceRecord("badname.example", DnsResourceRecordType.A, DnsClass.IN, 60, new DnsARecordData(IPAddress.Parse("192.0.2.11")))]);
+            async Task<DnsDatagram> UdpQuery(string name)
+            {
+                using var udp = new UdpClient(AddressFamily.InterNetwork);
+                DnsDatagram request = new(31, false, DnsOpcode.StandardQuery, false, false, true, false, false, true, DnsResponseCode.NoError, [new DnsQuestionRecord(name, DnsResourceRecordType.A, DnsClass.IN)]);
+                using MemoryStream wire = new(); request.WriteTo(wire);
+                await udp.SendAsync(wire.ToArray(), new IPEndPoint(IPAddress.Loopback, dnsPort));
+                using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(5));
+                var result = await udp.ReceiveAsync(timeout.Token);
+                return DnsDatagram.ReadFrom(new MemoryStream(result.Buffer));
+            }
+            Check((await UdpQuery("badip.example")).RCODE == DnsResponseCode.NoError, "Monitor mode rewrites live DNS response");
+            securityPolicy = securityPolicy with { Mode = "Block", DhcpResponse = "DenyNewLeases", DeviceDnsResponse = "Block" };
+            Check((await Call(original, "/api/security/policy/set", ("revision", "1"), ("policy", SerializePolicy(securityPolicy)))).GetProperty("status").GetString() == "ok", "Block policy activation failed");
+            Check((await Call(original, "/api/security/policy/set", ("revision", "1"), ("policy", SerializePolicy(securityPolicy)))).GetProperty("status").GetString() == "error", "Stale security policy API write accepted");
+            byte[] hardware = [2, 0, 0, 0, 0, 9];
+            string clientIdentifier = new DnsServerCore.Dhcp.Options.ClientIdentifierOption(1, hardware).ToString();
+            service.DnsServer.SecurityManager.DeviceResolver = _ => new SecurityDevice("Default", clientIdentifier, BitConverter.ToString(hardware), "lab-client", "default", "Lab", 99);
+            var badResponse = await UdpQuery("badip.example");
+            Check(badResponse.RCODE == DnsResponseCode.Refused && !badResponse.AuthenticData && badResponse.CheckingDisabled, "Live DNS IP block flags failed");
+            Check((await UdpQuery("badname.example")).RCODE == DnsResponseCode.Refused, "Live DNS domain blocking failed");
+            Check((await UdpQuery("host.example")).RCODE == DnsResponseCode.Refused, "Shared device signal not applied to other DNS requests");
+            Check((await UdpQuery("no-upstream.invalid")).RCODE == DnsResponseCode.Refused, "Device policy did not block before recursive lookup");
+            var dhcpServer = (DnsServerCore.Dhcp.DhcpServer)typeof(DnsWebService).GetField("_dhcpServer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(service);
+            DnsServerCore.Dhcp.Scope localScope = dhcpServer.GetScope("Default");
+            byte[] discoverWire = new byte[244];
+            discoverWire[0] = 1; discoverWire[1] = 1; discoverWire[2] = 6; hardware.CopyTo(discoverWire, 28);
+            new byte[] { 99, 130, 83, 99, 53, 1, 1, 255 }.CopyTo(discoverWire, 236);
+            Type messageType = typeof(DnsServerCore.Dhcp.Scope).Assembly.GetType("DnsServerCore.Dhcp.DhcpMessage");
+            var discover = Activator.CreateInstance(messageType, [new MemoryStream(discoverWire)]);
+            var getOffer = typeof(DnsServerCore.Dhcp.Scope).GetMethod("GetOfferAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var offer = await (Task<DnsServerCore.Dhcp.Lease>)getOffer.Invoke(localScope, [discover]);
+            Check(offer is null, "DHCP allocation hook ignores DNS device signal");
+            var securityEvents = await Call(fresh, "/api/security/events/list");
+            Check(securityEvents.GetProperty("response").GetProperty("events").GetArrayLength() >= 3 && securityEvents.GetProperty("response").GetProperty("signals").GetArrayLength() >= 1, "Security investigation API lacks cross-service evidence");
+            Check((await Call(original, "/api/security/signals/ingest", ("signals", "[]"))).GetProperty("status").GetString() == "error", "Non-cluster session allowed cluster signal injection");
+            using (var peerClient = new DnsServerCore.HttpApi.HttpApiClient(original.BaseAddress, ipv6Mode: IPv6Mode.Disabled))
+            {
+                peerClient.UseApiToken(token);
+                bool insecureTransportRejected = false;
+                try { await peerClient.PushSecuritySignalsAsync("[]"); }
+                catch (DnsServerCore.HttpApi.HttpApiClientException ex) { insecureTransportRejected = ex.Message.Contains("requires HTTPS"); }
+                Check(insecureTransportRejected, "Peer publication can transmit signals over plaintext HTTP");
+            }
+            Check((await Call(reader, "/api/security/policy/set", ("revision", "2"), ("policy", SerializePolicy(securityPolicy)))).GetProperty("status").GetString() == "error", "Unauthorized security policy write accepted");
+            Check((await original.GetStringAsync("/js/security.js")).Contains("refreshSecurity"), "Security console asset not served");
+            using var securityBackup = await original.GetAsync("/api/settings/backup?dnsSettings=true");
+            using (var archive = new System.IO.Compression.ZipArchive(new MemoryStream(await securityBackup.Content.ReadAsByteArrayAsync())))
+                Check(archive.GetEntry("security.json") is not null && archive.GetEntry("security-signals.json") is not null && archive.GetEntry("security-misp.json") is not null, "Shared security state omitted from configuration transfer format");
+            Check((await Call(fresh, "/api/security/policy/get")).GetProperty("status").GetString() == "ok", "Fresh administrative security access failed");
+            var protectedPolicy = securityPolicy with { Indicators = securityPolicy.Indicators.Append(new ThreatIndicator("inventory-ioc", "Network", "192.0.2.10", "Monitor", "Inventory lab")).ToArray() };
+            Check((await Call(original, "/api/security/policy/set", ("revision", "2"), ("policy", SerializePolicy(protectedPolicy)))).GetProperty("status").GetString() == "ok", "Inventory security policy setup failed");
+            var inventoryThreats = await Call(original, "/api/ipam/subnets/inspect", ("subnetId", subnetId));
+            Check(inventoryThreats.GetProperty("response").GetProperty("securityFindings").GetArrayLength() > 0, "IPAM is unaware of shared threat intelligence");
+            Check((await Call(original, "/api/admin/users/set", ("user", "ipam-reader-test"), ("memberOfGroups", "DNS Administrators"))).GetProperty("status").GetString() == "ok", "DNS administrator role fixture failed");
+            using var dnsAdmin = new HttpClient { BaseAddress = original.BaseAddress };
+            var dnsLogin = await Call(dnsAdmin, "/api/user/login", ("user", "ipam-reader-test"), ("pass", readerPassword), ("includeInfo", "true"));
+            Check(dnsLogin.GetProperty("status").GetString() == "ok", "Fresh session after role change failed");
+            dnsAdmin.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", dnsLogin.GetProperty("token").GetString());
+            Check((await Call(dnsAdmin, "/api/security/policy/get")).GetProperty("status").GetString() == "ok", "Fresh DNS admin session lacks intended view privilege");
+            Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "3"), ("policy", SerializePolicy(protectedPolicy)))).GetProperty("status").GetString() == "ok", "Fresh DNS admin session lacks intended policy modify privilege");
+            var unauthorizedSource = protectedPolicy with { Misp = new MispSettings(false, "https://unapproved.example/") };
+            Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "4"), ("policy", SerializePolicy(unauthorizedSource)))).GetProperty("status").GetString() == "error", "DNS-only admin can redirect MISP credential use");
+            Check((await Call(fresh, "/api/security/policy/get")).GetProperty("response").GetProperty("policy").GetProperty("revision").GetInt64() == 4, "Denied source change mutated policy or fresh administrative access was lost");
+            Console.WriteLine($"PASS: {checks} authenticated IPAM/security API and live DNS/DHCP-hook checks; loopback fresh administrative read and modify verified.");
             if (serve)
             {
                 string connectionFile = Path.Combine(AppContext.BaseDirectory, "lab-connection.json");

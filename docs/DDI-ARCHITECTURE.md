@@ -52,7 +52,7 @@ DNSSEC validation and policy response rewriting need explicit tests. Include cac
 
 ## IPAM and DHCP behavior
 
-The first persisted IPAM implementation and its current limits are described in [IPAM source of truth and implementation](IPAM.md). NetBox integration requires explicit object authority and provenance. The security requirements, intelligence integration, and scoring design are described in [DDI security module requirements](DDI-SECURITY.md).
+The first persisted IPAM implementation and its current limits are described in [IPAM source of truth and implementation](IPAM.md). NetBox integration requires explicit object authority and provenance. The first security implementation shares threat snapshots and expiring device signals across DNS, DHCP, and IPAM, with coordinator ingestion and existing cluster configuration distribution. Its requirements and remaining limits are described in [DDI security module requirements](DDI-SECURITY.md). This security awareness path is separate from the still-pending DHCP allocation replication and ownership protocol.
 
 Model network views, sites, subnets, pools, address assignments, reservations, devices, and lease observations as distinct entities. Enforce address uniqueness within a network view and reject invalid or conflicting allocation requests atomically. Maintain desired configuration separately from node observations so reconciliation does not silently overwrite an operator's intent.
 

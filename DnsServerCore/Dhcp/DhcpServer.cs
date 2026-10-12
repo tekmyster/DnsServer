@@ -65,6 +65,7 @@ namespace DnsServerCore.Dhcp
         #region variables
 
         readonly string _scopesFolder;
+        public Security.DdiSecurityManager SecurityManager { get; set; }
         readonly LogManager _log;
 
         readonly ConcurrentDictionary<IPAddress, UdpListener> _udpListeners = new ConcurrentDictionary<IPAddress, UdpListener>();

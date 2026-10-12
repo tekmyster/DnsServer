@@ -4,6 +4,7 @@ using System.Net;
 using System.Numerics;
 
 if (args.Contains("--api") || args.Contains("--serve")) { await ApiChecks.Run(args.Contains("--serve")); return; }
+if (args.Contains("--security")) { await SecurityChecks.Run(); return; }
 
 string folder = Path.Combine(Path.GetTempPath(), "ddi-ipam-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(folder);

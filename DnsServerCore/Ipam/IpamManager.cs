@@ -81,6 +81,7 @@ namespace DnsServerCore.Ipam
         }
 
         public byte[] Export() { lock (_sync) return JsonSerializer.SerializeToUtf8Bytes(_state, JsonOptions); }
+        public IpamSubnet[] GetSubnets() { lock (_sync) return _state.Subnets.ToArray(); }
         public void Restore(byte[] data)
         {
             IpamSnapshot state = Parse(data);

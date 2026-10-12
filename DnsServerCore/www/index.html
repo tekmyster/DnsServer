@@ -51,6 +51,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <script src="js/dnsclient.js"></script>
     <script src="js/dhcp.js"></script>
     <script src="js/ipam.js"></script>
+    <script src="js/security.js"></script>
     <script src="js/logs.js"></script>
 </head>
 <body>
@@ -156,6 +157,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                 <li id="mainPanelTabListSettings" role="presentation"><a href="#mainPanelTabPaneSettings" aria-controls="mainPanelTabPaneSettings" role="tab" data-toggle="tab" onclick="refreshDnsSettings();">Settings</a></li>
                                 <li id="mainPanelTabListDhcp" role="presentation"><a href="#mainPanelTabPaneDhcp" aria-controls="mainPanelTabPaneDhcp" role="tab" data-toggle="tab" onclick="refreshDhcpTab();">DHCP</a></li>
                                 <li id="mainPanelTabListIpam" role="presentation"><a href="#mainPanelTabPaneIpam" aria-controls="mainPanelTabPaneIpam" role="tab" data-toggle="tab" onclick="refreshIpam();">IPAM</a></li>
+                                <li id="mainPanelTabListSecurity" role="presentation"><a href="#mainPanelTabPaneSecurity" aria-controls="mainPanelTabPaneSecurity" role="tab" data-toggle="tab" onclick="refreshSecurity();">Security</a></li>
                                 <li id="mainPanelTabListAdmin" role="presentation"><a href="#mainPanelTabPaneAdmin" aria-controls="mainPanelTabPaneAdmin" role="tab" data-toggle="tab" onclick="refreshAdminTab();">Administration</a></li>
                                 <li id="mainPanelTabListLogs" role="presentation"><a href="#mainPanelTabPaneLogs" aria-controls="mainPanelTabPaneLogs" role="tab" data-toggle="tab" onclick="refreshLogsTab();">Logs</a></li>
                                 <li id="mainPanelTabListAbout" role="presentation"><a href="#mainPanelTabPaneAbout" aria-controls="mainPanelTabPaneAbout" role="tab" data-toggle="tab">About</a></li>
@@ -2486,6 +2488,72 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
                                 </div>
 
+                                <div id="mainPanelTabPaneSecurity" role="tabpanel" class="tab-pane" style="padding: 15px 0;">
+                                    <h3>DDI security</h3>
+                                    <p>DNS, DHCP, and IPAM share threat policies and device evidence. Behavioral scores are uncalibrated risk signals, not proof of data theft.</p>
+                                    <p id="securityRevision"></p><p id="securityHealth"></p>
+                                    <button class="btn btn-default" onclick="refreshSecurity();">Refresh security</button>
+                                    <div class="security-edit">
+                                        <h4>Protection settings</h4>
+                                        <form onsubmit="saveSecuritySettings(); return false;">
+                                            <p><label><input id="securityEnabled" type="checkbox" /> Enable security module</label> <label><input id="securityAuthoritative" type="checkbox" /> Inspect locally authoritative answers</label></p>
+                                            <div class="row">
+                                                <div class="col-sm-4"><label for="securityMode">Enforcement</label><select id="securityMode" class="form-control"><option>Monitor</option><option>Block</option></select></div>
+                                                <div class="col-sm-4"><label for="securityAlertThreshold">Behavioral alert threshold</label><input id="securityAlertThreshold" class="form-control" type="number" min="1" max="100" /></div>
+                                                <div class="col-sm-4"><label for="securityDeviceThreshold">Shared device response threshold</label><input id="securityDeviceThreshold" class="form-control" type="number" min="1" max="100" /></div>
+                                            </div>
+                                            <div class="row">
+                                                <div class="col-sm-6"><label for="securityDeviceDns">DNS response to device signals</label><select id="securityDeviceDns" class="form-control"><option>Monitor</option><option>Block</option></select></div>
+                                                <div class="col-sm-6"><label for="securityDhcpResponse">DHCP response to device signals</label><select id="securityDhcpResponse" class="form-control"><option value="Observe">Observe</option><option value="DenyNewLeases">Withhold new leases</option></select></div>
+                                            </div>
+                                            <p>Response actions apply only in Block mode. Withholding new leases preserves existing lease renewals. Device attribution depends on current, unambiguous DHCP evidence.</p>
+                                            <h4>MISP enrichment</h4>
+                                            <p><label><input id="securityMispEnabled" type="checkbox" /> Enable background MISP enrichment</label></p>
+                                            <div class="row">
+                                                <div class="col-sm-6"><label for="securityMispUrl">MISP HTTPS URL</label><input id="securityMispUrl" class="form-control" placeholder="https://misp.example/" /></div>
+                                                <div class="col-sm-6"><label for="securityMispCredential">API key environment variable</label><input id="securityMispCredential" class="form-control" placeholder="DDI_MISP_API_KEY" /></div>
+                                            </div>
+                                            <div class="row">
+                                                <div class="col-sm-6"><label for="securityMispRefresh">Refresh interval in seconds</label><input id="securityMispRefresh" class="form-control" type="number" min="60" max="86400" /></div>
+                                                <div class="col-sm-6"><label for="securityMispLifetime">Cached evidence lifetime in hours</label><input id="securityMispLifetime" class="form-control" type="number" min="1" max="168" /></div>
+                                            </div>
+                                            <p>MISP supplies monitor evidence. Its API key remains on the server and is not saved in the policy.</p>
+                                            <button class="btn btn-primary" type="submit">Save settings</button>
+                                        </form>
+                                        <h4>Add threat indicators or exceptions</h4>
+                                        <form onsubmit="addSecurityIndicators(); return false;">
+                                            <div class="row">
+                                                <div class="col-sm-4"><label for="securityIndicatorKind">Indicator type</label><select id="securityIndicatorKind" class="form-control"><option value="Domain">Exact domain</option><option value="DomainSuffix">Domain and subdomains</option><option value="Network">IP address or network</option><option value="Url">URL evidence only</option></select></div>
+                                                <div class="col-sm-4"><label for="securityIndicatorAction">Action</label><select id="securityIndicatorAction" class="form-control"><option>Monitor</option><option>Block</option><option>Allow</option></select></div>
+                                                <div class="col-sm-4"><label for="securityIndicatorSource">Source</label><input id="securityIndicatorSource" class="form-control" value="Local" required /></div>
+                                            </div>
+                                            <div class="row">
+                                                <div class="col-sm-4"><label for="securityIndicatorConfidence">Source confidence</label><input id="securityIndicatorConfidence" class="form-control" type="number" min="0" max="100" value="80" /></div>
+                                                <div class="col-sm-4"><label for="securityIndicatorClient">Client network scope</label><input id="securityIndicatorClient" class="form-control" placeholder="All clients, or 192.0.2.0/24" /></div>
+                                                <div class="col-sm-4"><label for="securityIndicatorExpiry">Expiry</label><input id="securityIndicatorExpiry" class="form-control" type="datetime-local" /></div>
+                                            </div>
+                                            <label for="securityIndicatorValues">One value per line</label><textarea id="securityIndicatorValues" class="form-control" rows="4" required></textarea>
+                                            <p>URL paths are retained as evidence and do not block a hostname. Query-name exceptions affect this module; existing DNS blocking rules still apply.</p>
+                                            <button class="btn btn-primary" type="submit">Add indicators</button>
+                                        </form>
+                                    </div>
+                                    <h4>Local policy indicators</h4>
+                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Type</th><th>Value</th><th>Action</th><th>Source</th><th>Confidence</th><th>Clients</th><th>Expiry</th><th>Actions</th></tr></thead><tbody id="securityIndicatorsBody"></tbody></table></div>
+                                    <h4>Policy simulation</h4>
+                                    <form onsubmit="simulateSecurity(); return false;">
+                                        <div class="row">
+                                            <div class="col-sm-3"><label for="securitySimQuery">Query name</label><input id="securitySimQuery" class="form-control" required /></div>
+                                            <div class="col-sm-3"><label for="securitySimClient">Client IP</label><input id="securitySimClient" class="form-control" value="127.0.0.1" required /></div>
+                                            <div class="col-sm-3"><label for="securitySimCnames">CNAME targets</label><input id="securitySimCnames" class="form-control" placeholder="Comma separated" /></div>
+                                            <div class="col-sm-3"><label for="securitySimAddresses">Resolved IPs</label><input id="securitySimAddresses" class="form-control" placeholder="Comma separated" /></div>
+                                        </div><br /><button class="btn btn-default" type="submit">Simulate</button>
+                                    </form><div id="securitySimulation" class="well" style="margin-top: 10px;"></div>
+                                    <h4>Recent DNS and DHCP security events</h4>
+                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Time</th><th>Node</th><th>Service</th><th>Client</th><th>Query</th><th>Action</th><th>Behavioral score</th><th>Device</th><th>Reason</th><th>Evidence</th></tr></thead><tbody id="securityEventsBody"></tbody></table></div>
+                                    <pre id="securityEvidence"></pre>
+                                    <h4>Shared device signals</h4>
+                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Source node</th><th>Source service</th><th>DHCP scope</th><th>Hardware address</th><th>Risk priority</th><th>Expiry</th><th>Reason</th></tr></thead><tbody id="securitySignalsBody"></tbody></table></div>
+                                </div>
                                 <div id="mainPanelTabPaneIpam" role="tabpanel" class="tab-pane" style="padding: 15px 0;">
                                     <h3>IP address management</h3>
                                     <p>Manage intended address assignments and compare them with linked DNS zones and DHCP scopes.</p>

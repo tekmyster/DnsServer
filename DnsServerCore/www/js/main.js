@@ -235,10 +235,12 @@ function showPageMain() {
     if (sessionData.info.permissions.Settings.canView) {
         $("#mainPanelTabListSettings").show();
         $("#mainPanelTabListIpam").show();
+        $("#mainPanelTabListSecurity").show();
     }
     else {
         $("#mainPanelTabListSettings").hide();
         $("#mainPanelTabListIpam").hide();
+        $("#mainPanelTabListSecurity").hide();
     }
 
     if (sessionData.info.permissions.DhcpServer.canView) {

@@ -2863,6 +2863,12 @@ namespace DnsServerCore.Dns
                 }
             }
 
+            if (SecurityManager is not null)
+            {
+                try { response = SecurityManager.InspectResponse(request, remoteEP, response); }
+                catch (Exception ex) { _log.Write(remoteEP, protocol, ex); }
+            }
+
             if (request.EDNS is null)
             {
                 if (response.EDNS is not null)
@@ -4781,6 +4787,11 @@ namespace DnsServerCore.Dns
 
         private async Task<DnsDatagram> ProcessRecursiveQueryAsync(DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol, IReadOnlyList<DnsResourceRecord> conditionalForwarders, bool dnssecValidation, bool skipDnsAppAuthoritativeRequestHandlers, int clientTimeout)
         {
+            if (SecurityManager is not null)
+            {
+                DnsDatagram securityResponse = SecurityManager.CheckQuery(request, remoteEP);
+                if (securityResponse is not null) return securityResponse;
+            }
             bool isAllowed = await IsAllowedAsync(request, remoteEP, protocol);
             if (!isAllowed)
             {
@@ -6958,6 +6969,8 @@ namespace DnsServerCore.Dns
 
         public string ConfigFolder
         { get { return _configFolder; } }
+
+        public Security.DdiSecurityManager SecurityManager { get; set; }
 
         public IReadOnlyList<IPEndPoint> LocalEndPoints
         {

@@ -950,6 +950,12 @@ namespace DnsServerCore.Dhcp
         {
             ClientIdentifierOption clientIdentifier = request.GetClientIdentifier(_ignoreClientIdentifierOption);
 
+            if (_dhcpServer.SecurityManager?.ObserveDhcp(_name, clientIdentifier.ToString(), BitConverter.ToString(request.ClientHardwareAddress), request.HostName?.HostName, _leases.TryGetValue(clientIdentifier, out Lease securityLease) && securityLease.LeaseExpires > DateTime.UtcNow) == true)
+            {
+                _log.Write("DHCP security policy withheld a new offer for scope '" + _name + "'.");
+                return null;
+            }
+
             if (_leases.TryGetValue(clientIdentifier, out Lease existingLease))
             {
                 //lease already exists
@@ -1360,6 +1366,7 @@ namespace DnsServerCore.Dhcp
             lease.ExtendLease(GetLeaseTime());
 
             _leases[lease.ClientIdentifier] = lease;
+            _dhcpServer.SecurityManager?.DeviceContextChanged?.Invoke();
             _offers.TryRemove(lease.ClientIdentifier, out _);
 
             _dhcpServer.AddDnsEntries(this, lease);
@@ -1370,6 +1377,7 @@ namespace DnsServerCore.Dhcp
         internal void ReleaseLease(Lease lease)
         {
             _leases.TryRemove(lease.ClientIdentifier, out _);
+            _dhcpServer.SecurityManager?.DeviceContextChanged?.Invoke();
 
             _dhcpServer.RemoveDnsEntries(this, lease);
 

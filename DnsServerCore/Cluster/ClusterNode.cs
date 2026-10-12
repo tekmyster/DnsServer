@@ -600,6 +600,12 @@ namespace DnsServerCore.Cluster
             }
         }
 
+        public Task PushSecuritySignalsAsync(string signals, CancellationToken cancellationToken = default)
+        {
+            if (_type != ClusterNodeType.Primary) throw new InvalidOperationException("Security signals must go to the cluster primary.");
+            return GetApiClient().PushSecuritySignalsAsync(signals, cancellationToken);
+        }
+
         public async Task AskSecondaryNodeToLeaveClusterAsync(CancellationToken cancellationToken = default)
         {
             if (_type != ClusterNodeType.Secondary)

@@ -11,6 +11,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using TechnitiumLibrary.Net.Dns;
+using TechnitiumLibrary.Net.Dns.ResourceRecords;
 
 static class DistributedTransportChecks
 {
@@ -29,7 +30,7 @@ static class DistributedTransportChecks
         using var response = await client.PostAsync(path, new FormUrlEncodedContent(fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value))));
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync()); return json.RootElement.Clone();
     }
-    public static async Task Run()
+    public static async Task Run(bool serve = false)
     {
         string folder = Path.Combine(Path.GetTempPath(), "ddi-transport-tests-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
         var services = new List<DnsWebService>(); var originals = new List<HttpClient>(); var freshAdmins = new List<HttpClient>(); var tlsClients = new List<HttpClient>(); var peerApis = new List<HttpApiClient>();
@@ -135,7 +136,36 @@ static class DistributedTransportChecks
             Check(grant.GetProperty("status").GetString() == "ok" && grant.GetProperty("response").GetProperty("state").ValueKind == JsonValueKind.Object, "Live donor grant endpoint failed");
             stores[0].Merge(Encoding.UTF8.GetBytes(grant.GetProperty("response").GetProperty("state").GetRawText()));
             Check(stores[0].GrantedAddresses("Default").Length == 1, "Live donor authority not usable by borrower");
+            long donorSequence = stores[0].Snapshot().Replicas.Single(r => r.Scope == "Default" && r.Node == names[0]).Sequence;
+            string handoffId = Guid.NewGuid().ToString("N");
+            var parameters = new (string, string)[] { ("scope", "Default"), ("receiver", names[2]), ("addresses", AllocationSequence.Address(address).ToString()), ("requestId", handoffId), ("expectedSequence", donorSequence.ToString()) };
+            Check((await Call(tlsClients[0], "/api/ddi/dhcp/handoff", parameters)).GetProperty("status").GetString() == "error", "Service token can initiate an administrative handoff");
+            links[(0, 2)].Disconnected = true;
+            var handoff = await Call(originals[0], "/api/ddi/dhcp/handoff", parameters);
+            Check(handoff.GetProperty("status").GetString() == "ok" && !handoff.GetProperty("response").GetProperty("receiverAcknowledged").GetBoolean(), "Lost receiver link does not report durable surrender separately");
+            Check(!stores[0].HasAuthority("Default", address) && !stores[2].HasAuthority("Default", address), "Failed delivery restores donor authority or invents receiver authority");
+            links[(0, 2)].Disconnected = false;
+            handoff = await Call(originals[0], "/api/ddi/dhcp/handoff", parameters);
+            Check(handoff.GetProperty("status").GetString() == "ok" && handoff.GetProperty("response").GetProperty("receiverAcknowledged").GetBoolean(), "Same handoff cannot retry delivery over HTTPS");
+            Check(stores[2].FindLease("Default", "1-0201")?.Expires == expiry && stores[2].ResolveLive(address)?.Node == names[2], "Receiving native server loses inherited lease or shared identity");
+            await (Task)synchronize.Invoke(services[0], [CancellationToken.None]);
+            Check(stores[1].ResolveLive(address)?.Node == names[2] && !stores[1].Available("Default", address, "other"), "Third server is unaware of the new lease authority");
+            Check((await Call(originals[0], "/api/zones/create", ("zone", "lab.example"), ("type", "Primary"))).GetProperty("status").GetString() == "ok", "Handoff DNS cleanup fixture failed");
+            services[0].DnsServer.AuthZoneManager.SetRecords("lab.example", [new DnsResourceRecord("client.lab.example", DnsResourceRecordType.A, DnsClass.IN, 60, new DnsARecordData(AllocationSequence.Address(address)))]);
+            primaryScope.DomainName = "lab.example"; primaryScope.DnsUpdates = true;
+            Field<DhcpServer>(services[0], "_dhcpServer").RemoveDnsEntries(primaryScope, Lease.Recover(stores[2].FindLease("Default", "1-0201"), false));
+            var remainingRecords = new List<DnsResourceRecord>(); services[0].DnsServer.AuthZoneManager.ListAllZoneRecords("lab.example", [DnsResourceRecordType.A], remainingRecords);
+            Check(remainingRecords.Any(r => r.Name == "client.lab.example"), "Expired donor lease cleanup deletes the recipient's DNS record");
             Console.WriteLine($"PASS: {checks} three-server certificate-pinned HTTPS replication, bootstrap, authentication, link failure and grant checks; loopback fresh read/modify sessions verified.");
+            if (serve)
+            {
+                string connectionFile = Path.Combine(AppContext.BaseDirectory, "lab-connection.json");
+                File.WriteAllText(connectionFile, JsonSerializer.Serialize(new { url = originals[0].BaseAddress.ToString(), user = "admin", password = passwords[0], configFolder = folder }));
+                Console.WriteLine("Isolated three-server UI lab ready; connection details saved under test output directory.");
+                string stopFile = connectionFile + ".stop";
+                try { while (!File.Exists(stopFile)) await Task.Delay(250); }
+                finally { File.Delete(connectionFile); if (File.Exists(stopFile)) File.Delete(stopFile); }
+            }
         }
         finally
         {

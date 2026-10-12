@@ -7,6 +7,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,7 +17,9 @@ namespace DnsServerCore.Dhcp
     public sealed record AllocationReservation(uint Address, string Client);
     public sealed record DhcpHaGroup(string Name, string Region, string Primary, string Secondary);
     public sealed record AllocationPlan(string Scope, string Epoch, uint First, uint Last, string Seed, string[] Owners, AllocationRange[] Excluded, uint Mask = 0, AllocationReservation[] Reservations = null, string Configuration = null, DhcpHaGroup[] HaGroups = null);
-    public sealed record AllocationEntry(uint Address, string Client, string Hardware, string Host, string State, DateTime Expires, string GrantId = null, string Borrower = null, string AuthorityOwner = null);
+    public sealed record AllocationProtection(string State, DateTime Expires);
+    public sealed record AllocationEntry(uint Address, string Client, string Hardware, string Host, string State, DateTime Expires, string GrantId = null, string Borrower = null, string AuthorityOwner = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AllocationProtection Protection = null);
     public sealed record AllocationEvent(long Sequence, DateTime Timestamp, AllocationEntry Before, AllocationEntry After);
     public sealed record AllocationReplica(string Scope, string Epoch, string Node, long Sequence, AllocationEntry[] Entries, AllocationEvent[] History = null);
     public sealed record AllocationDevice(string Scope, string Node, AllocationEntry Lease);
@@ -188,6 +191,7 @@ namespace DnsServerCore.Dhcp
                 foreach (var e in r.Entries)
                 {
                     if (e is null || e.Client?.Length > 1024 || e.Hardware?.Length > 255 || e.Host?.Length > 255 || e.Expires.Kind != DateTimeKind.Utc || e.State != "Offer" && e.State != "Lease" && e.State != "Grant" && e.State != "Released" && e.State != "Declined" || e.GrantId is not null && !Guid.TryParseExact(e.GrantId, "N", out _) || e.State == "Grant" && (e.GrantId is null || !p.Owners.Contains(e.Borrower) || e.Borrower == r.Node)) throw new ArgumentException("Invalid allocation entry.");
+                    if (e.Protection is not null && (e.State != "Grant" || e.Protection.Expires.Kind != DateTimeKind.Utc || e.Protection.State != "Lease" && e.Protection.State != "Offer" && e.Protection.State != "Declined" || string.IsNullOrEmpty(e.Client))) throw new ArgumentException("Invalid handoff protection.");
                     if (sequence.Owner(e.Address) != r.Node)
                     {
                         var donor = state.Replicas.SingleOrDefault(d => d.Scope == r.Scope && d.Node == e.AuthorityOwner);
@@ -287,7 +291,7 @@ namespace DnsServerCore.Dhcp
             var plan = _state.Plans.Single(p => p.Scope == scope); var local = Local(scope, plan);
             if (!HasAuthority(scope, entry.Address)) throw new InvalidOperationException("Address belongs to a different owner.");
             // Released tombstones can be compacted: every replica is a complete snapshot and sequence is durable.
-            var entries = local.Entries.Where(e => e.Address != entry.Address && (e.State == "Grant" || e.State != "Released" && e.Expires > DateTime.UtcNow)).Append(entry).ToArray();
+            var entries = local.Entries.Where(e => e.Address != entry.Address && (e.State == "Grant" || e.State != "Released" && e.Expires > DateTime.UtcNow || IncomingGrant(scope, e.Address)?.Protection?.Expires > DateTime.UtcNow)).Append(entry).ToArray();
             long number = checked(local.Sequence + 1);
             var history = (local.History ?? []).Append(new AllocationEvent(number, DateTime.UtcNow, local.Entries.SingleOrDefault(e => e.Address == entry.Address), entry)).TakeLast(2000).ToArray();
             var next = local with { Sequence = number, Entries = entries, History = history };
@@ -302,6 +306,8 @@ namespace DnsServerCore.Dhcp
                 var p = _state.Plans.Single(p => p.Scope == scope);
                 if ((p.Reservations ?? []).Any(r => r.Address == address && r.Client != client)) return false;
                 if (!HasAuthority(scope, address)) return false;
+                var protection = IncomingGrant(scope, address);
+                if (protection?.Protection?.Expires > DateTime.UtcNow && (protection.Protection.State == "Declined" || client is null || protection.Client != client)) return false;
                 var entry = Local(scope, p).Entries.SingleOrDefault(e => e.Address == address);
                 return entry is null || entry.State == "Released" || entry.State != "Grant" && (entry.Expires <= DateTime.UtcNow || entry.State != "Declined" && client is not null && entry.Client == client);
             }
@@ -321,6 +327,8 @@ namespace DnsServerCore.Dhcp
                 if (!Available(scope, address, client)) throw new InvalidOperationException("Allocation authority is unavailable.");
                 var prior = Local(scope, _state.Plans.Single(p => p.Scope == scope)).Entries.SingleOrDefault(e => e.Address == address && e.State == "Lease" && e.Client == client);
                 if (prior is not null && prior.Expires > expires) expires = prior.Expires; // a lost shorter renewal ACK cannot revoke the client's prior lifetime
+                var inherited = IncomingGrant(scope, address);
+                if (inherited?.Protection?.State == "Lease" && inherited.Protection.Expires > expires) expires = inherited.Protection.Expires;
                 Mutate(scope, Entry(scope, address, client, hardware, host, "Lease", expires));
             }
         }
@@ -329,6 +337,7 @@ namespace DnsServerCore.Dhcp
             lock (_sync)
             {
                 var p = _state.Plans.Single(p => p.Scope == scope); var entry = Local(scope, p).Entries.SingleOrDefault(e => e.Address == address);
+                entry ??= InheritedEntries(scope, NodeName(), "Lease").Concat(InheritedEntries(scope, NodeName(), "Offer")).SingleOrDefault(e => e.Address == address);
                 if (entry is null || entry.Client != client || entry.State == "Grant") return;
                 Mutate(scope, entry with { State = "Released", Expires = DateTime.UtcNow });
             }
@@ -351,6 +360,42 @@ namespace DnsServerCore.Dhcp
                 Mutate(scope, grant); return grant;
             }
         }
+        // Connected-owner surrender is atomic with the existing ACK lock. A lost reply must never
+        // restore donor authority; retry the same operation or recover the published grant snapshot.
+        public void Handoff(string scope, uint[] addresses, string borrower, string requestId, long expectedSequence)
+        {
+            if (!Guid.TryParseExact(requestId, "N", out _) || addresses is null || addresses.Length < 1 || addresses.Length > 256 || addresses.Distinct().Count() != addresses.Length) throw new ArgumentException("Use a stable request ID and 1–256 distinct addresses.");
+            lock (_sync)
+            {
+                EnsureLocalAuthority();
+                var plan = _state.Plans.Single(p => p.Scope == scope); var local = Local(scope, plan);
+                if (borrower == NodeName() || !plan.Owners.Contains(borrower)) throw new ArgumentException("Receiver must be another enrolled owner.");
+                string Id(uint address) => new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(requestId + ":" + address.ToString(System.Globalization.CultureInfo.InvariantCulture))).AsSpan(0, 16)).ToString("N");
+                bool Retried(uint address) => local.Entries.Any(e => e.Address == address && e.State == "Grant" && e.GrantId == Id(address) && e.Borrower == borrower);
+                if (addresses.All(Retried)) return;
+                if (local.Sequence != expectedSequence) throw new InvalidOperationException("Owner state changed; review a fresh snapshot before handoff.");
+                var entries = local.Entries.ToDictionary(e => e.Address); var history = (local.History ?? []).ToList(); long sequence = local.Sequence;
+                foreach (uint address in addresses.Order())
+                {
+                    if (_sequences[scope].Owner(address) != NodeName()) throw new InvalidOperationException("Only the original owner can surrender an address.");
+                    entries.TryGetValue(address, out var previous);
+                    if (previous?.State == "Grant") throw new InvalidOperationException("Address already has a permanent receiver.");
+                    var reservation = (plan.Reservations ?? []).SingleOrDefault(r => r.Address == address);
+                    var active = previous?.Expires > DateTime.UtcNow && previous.State != "Released";
+                    var grant = new AllocationEntry(address, active ? previous.Client : reservation?.Client ?? "", active ? previous.Hardware : "", active ? previous.Host : "", "Grant", DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc), Id(address), borrower,
+                        Protection: active ? new(previous.State, previous.Expires) : null);
+                    entries[address] = grant; history.Add(new(checked(++sequence), DateTime.UtcNow, previous, grant));
+                }
+                var next = local with { Sequence = sequence, Entries = entries.Values.ToArray(), History = history.TakeLast(2000).ToArray() };
+                var state = _state with { Replicas = _state.Replicas.Where(r => r.Scope != scope || r.Node != next.Node).Append(next).ToArray() };
+                Validate(state); Save(state);
+            }
+        }
+        AllocationEntry IncomingGrant(string scope, uint address)
+        {
+            string owner = _sequences[scope].Owner(address);
+            return owner == NodeName() ? null : _state.Replicas.SingleOrDefault(r => r.Scope == scope && r.Node == owner)?.Entries.SingleOrDefault(e => e.Address == address && e.State == "Grant" && e.Borrower == NodeName());
+        }
         AllocationEntry Entry(string scope, uint address, string client, string hardware, string host, string state, DateTime expires)
         {
             var p = _state.Plans.Single(p => p.Scope == scope); string owner = _sequences[scope].Owner(address);
@@ -371,24 +416,46 @@ namespace DnsServerCore.Dhcp
             lock (_sync) return _state.Replicas.Where(r => r.Scope == scope && r.Node != NodeName()).SelectMany(r => r.Entries).Where(e => e.State == "Grant" && e.Borrower == NodeName()).Select(e => e.Address).ToArray();
         }
         public AllocationEntry FindLease(string scope, string client)
-        { lock (_sync) return _state.Replicas.Where(r => r.Scope == scope && r.Node == NodeName()).SelectMany(r => r.Entries).Where(e => e.Client == client && e.State == "Lease" && e.Expires > DateTime.UtcNow).OrderByDescending(e => e.Expires).FirstOrDefault(); }
+        {
+            lock (_sync)
+            {
+                var entries = _state.Replicas.Where(r => r.Scope == scope && r.Node == NodeName()).SelectMany(r => r.Entries).ToArray();
+                return entries.Where(e => e.Client == client && e.State == "Lease" && e.Expires > DateTime.UtcNow)
+                    .Concat(_state.Replicas.Where(r => r.Scope == scope && r.Node != NodeName()).SelectMany(r => r.Entries)
+                        .Where(e => e.State == "Grant" && e.Borrower == NodeName() && e.Client == client && e.Protection?.State == "Lease" && e.Protection.Expires > DateTime.UtcNow && !entries.Any(l => l.Address == e.Address))
+                        .Select(e => Entry(scope, e.Address, e.Client, e.Hardware, e.Host, "Lease", e.Protection.Expires)))
+                    .OrderByDescending(e => e.Expires).FirstOrDefault();
+            }
+        }
         public AllocationEntry FindOffer(string scope, string client)
-        { lock (_sync) return _state.Replicas.Where(r => r.Scope == scope && r.Node == NodeName()).SelectMany(r => r.Entries).Where(e => e.Client == client && e.State == "Offer" && e.Expires > DateTime.UtcNow).OrderByDescending(e => e.Expires).FirstOrDefault(); }
+        { lock (_sync) return _state.Replicas.Where(r => r.Scope == scope && r.Node == NodeName()).SelectMany(r => r.Entries).Concat(InheritedEntries(scope, NodeName(), "Offer")).Where(e => e.Client == client && e.State == "Offer" && e.Expires > DateTime.UtcNow).OrderByDescending(e => e.Expires).FirstOrDefault(); }
         public void ReleaseOffer(string scope, string client)
         { lock (_sync) { var offer = FindOffer(scope, client); if (offer is not null) Mutate(scope, offer with { State = "Released", Expires = DateTime.UtcNow }); } }
         public bool HasLiveOffer(string scope, uint address, string client)
-        { lock (_sync) return _state.Replicas.Where(r => r.Scope == scope && r.Node == NodeName()).SelectMany(r => r.Entries).Any(e => e.Address == address && e.Client == client && e.State == "Offer" && e.Expires > DateTime.UtcNow); }
+        { lock (_sync) return FindOffer(scope, client)?.Address == address; }
         public void Decline(string scope, uint address, string client)
         {
             lock (_sync)
             {
                 var p = _state.Plans.Single(p => p.Scope == scope); var entry = Local(scope, p).Entries.SingleOrDefault(e => e.Address == address && e.Client == client);
+                entry ??= InheritedEntries(scope, NodeName(), "Lease").Concat(InheritedEntries(scope, NodeName(), "Offer")).SingleOrDefault(e => e.Address == address && e.Client == client);
                 if (entry is not null && entry.State != "Grant") Mutate(scope, entry with { State = "Declined", Expires = DateTime.UtcNow.AddMinutes(10) });
             }
         }
+        IEnumerable<AllocationEntry> InheritedEntries(string scope, string receiver, string state)
+        {
+            var local = _state.Replicas.SingleOrDefault(r => r.Scope == scope && r.Node == receiver);
+            return _state.Replicas.Where(r => r.Scope == scope && r.Node != receiver).SelectMany(r => r.Entries
+                .Where(e => e.State == "Grant" && e.Borrower == receiver && e.Protection?.State == state && local?.Entries.Any(l => l.Address == e.Address) != true)
+                .Select(e => e with { State = state, Expires = e.Protection.Expires, Borrower = null, AuthorityOwner = r.Node, Protection = null }));
+        }
         void RebuildLeaseIndex()
         {
-            Volatile.Write(ref _leaseIndex, _state.Replicas.SelectMany(r => r.Entries.Where(e => e.State == "Lease").Select(e => new AllocationDevice(r.Scope, r.Node, e))).GroupBy(d => d.Lease.Address).ToDictionary(g => g.Key, g => g.ToArray()));
+            var receivers = _state.Replicas.ToDictionary(r => (r.Scope, r.Node), r => r.Entries.Select(e => e.Address).ToHashSet());
+            var leases = _state.Replicas.SelectMany(r => r.Entries.Where(e => e.State == "Lease").Select(e => new AllocationDevice(r.Scope, r.Node, e)))
+                .Concat(_state.Replicas.SelectMany(r => r.Entries.Where(e => e.State == "Grant" && e.Protection?.State == "Lease" && (!receivers.TryGetValue((r.Scope, e.Borrower), out var known) || !known.Contains(e.Address)))
+                    .Select(e => new AllocationDevice(r.Scope, e.Borrower, e with { State = "Lease", Expires = e.Protection.Expires, Borrower = null, AuthorityOwner = r.Node, Protection = null }))));
+            Volatile.Write(ref _leaseIndex, leases.GroupBy(d => d.Lease.Address).ToDictionary(g => g.Key, g => g.ToArray()));
         }
         public AllocationDevice ResolveLive(uint address)
         {
@@ -396,13 +463,18 @@ namespace DnsServerCore.Dhcp
             var active = values.Where(d => d.Lease.Expires > DateTime.UtcNow).ToArray();
             return active.Length == 1 ? active[0] : null; // immutable index lookup never waits for replication/disk writes
         }
+        public AllocationDevice[] LiveLeases(string scope)
+            => Volatile.Read(ref _leaseIndex).Values.SelectMany(d => d).Where(d => d.Scope == scope && d.Lease.Expires > DateTime.UtcNow).ToArray();
         public bool HasLiveConflict(uint address, string client, string hardware)
         { return Volatile.Read(ref _leaseIndex).TryGetValue(address, out var values) && values.Any(d => d.Lease.Expires > DateTime.UtcNow && (d.Lease.Client != client || !string.Equals(d.Lease.Hardware, hardware, StringComparison.OrdinalIgnoreCase))); }
         public AllocationDevice ResolveAt(uint address, DateTime timestamp)
         {
             lock (_sync)
             {
-                var observations = _state.Replicas.Select(r => (r, history: (r.History ?? []).Where(h => h.After.Address == address && h.Timestamp <= timestamp).OrderByDescending(h => h.Sequence).FirstOrDefault())).Where(x => x.history?.After.State == "Lease" && x.history.After.Expires > timestamp).Select(x => new AllocationDevice(x.r.Scope, x.r.Node, x.history.After)).ToArray();
+                var latest = _state.Replicas.Select(r => (r, history: (r.History ?? []).Where(h => h.After.Address == address && h.Timestamp <= timestamp).OrderByDescending(h => h.Sequence).FirstOrDefault())).Where(x => x.history is not null).ToArray();
+                var observations = latest.Where(x => x.history.After.State == "Lease" && x.history.After.Expires > timestamp).Select(x => new AllocationDevice(x.r.Scope, x.r.Node, x.history.After))
+                    .Concat(latest.Where(x => x.history.After.State == "Grant" && x.history.After.Protection?.State == "Lease" && x.history.After.Protection.Expires > timestamp && !latest.Any(other => other.r.Scope == x.r.Scope && other.r.Node == x.history.After.Borrower && other.history.Timestamp >= x.history.Timestamp))
+                        .Select(x => new AllocationDevice(x.r.Scope, x.history.After.Borrower, x.history.After with { State = "Lease", Expires = x.history.After.Protection.Expires, Borrower = null, AuthorityOwner = x.r.Node, Protection = null }))).ToArray();
                 return observations.Length == 1 ? observations[0] : null;
             }
         }

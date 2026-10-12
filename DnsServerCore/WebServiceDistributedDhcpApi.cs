@@ -111,6 +111,31 @@ namespace DnsServerCore
             var writer = context.GetCurrentJsonWriter(); writer.WritePropertyName("state");
             if (state is null) writer.WriteNullValue(); else writer.WriteRawValue(state);
         }
+        async Task HandoffAllocation(HttpContext context)
+        {
+            RequireDhcpPermission(context, PermissionFlag.Modify);
+            if (context.GetCurrentSession().Type == UserSessionType.ClusterApiToken) throw new DnsWebServiceException("Planned handoff requires an administrative user session.");
+            string name = context.Request.GetQueryOrForm("scope");
+            var scope = _dhcpServer.GetScope(name) ?? throw new ArgumentException("Unknown scope.");
+            var plan = _allocation.Plan(name) ?? throw new ArgumentException("Scope has no allocation plan.");
+            if (!scope.MatchesAllocationPlan(plan)) throw new InvalidOperationException("Scope differs from its ownership plan.");
+            string borrower = AllocationNode(context.Request.GetQueryOrForm("receiver"));
+            string input = context.Request.GetQueryOrForm("addresses");
+            if (input.Length > 8192) throw new ArgumentException("Address selection is too large.");
+            uint[] addresses = input.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Select(a => AllocationSequence.Number(System.Net.IPAddress.Parse(a))).ToArray();
+            string requestId = context.Request.GetQueryOrForm("requestId");
+            long sequence = long.Parse(context.Request.GetQueryOrForm("expectedSequence"), System.Globalization.CultureInfo.InvariantCulture);
+            _allocation.Handoff(name, addresses, borrower, requestId, sequence);
+            _log.Write(GetRemoteEndPoint(context), "[" + GetSessionUser(context).Username + "] Persisted DHCP handoff '" + requestId + "' for " + addresses.Length + " addresses in '" + name + "' to '" + borrower + "'.");
+            // Failure after surrender leaves the donor fenced for these addresses. The same request
+            // returns the same grant state, and the normal mesh also retries its delivery.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted); deadline.CancelAfter(TimeSpan.FromSeconds(3));
+            bool delivered = false;
+            try { if (_clusterManager.TryGetClusterNode(borrower, out var peer)) { await peer.PushAllocationStateAsync(Encoding.UTF8.GetString(_allocation.Export()), deadline.Token); delivered = true; } }
+            catch (Exception) when (!context.RequestAborted.IsCancellationRequested) { }
+            context.GetCurrentJsonWriter().WriteBoolean("receiverAcknowledged", delivered);
+            WriteAllocationState(context);
+        }
         async Task InstallAllocationPlans(AllocationState state)
         {
             if (state is null || state.Plans is null) throw new ArgumentException("Missing allocation plans.");

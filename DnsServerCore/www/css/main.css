@@ -31,6 +31,20 @@ body {
     line-height: 1.42857143 !important;
 }
 
+.ddi-shared-dhcp summary {
+    cursor: pointer;
+}
+
+.ddi-shared-dhcp form {
+    margin-top: 10px;
+}
+
+@media (max-width: 969px) {
+    .ddi-shared-dhcp {
+        max-width: calc(100vw - 60px);
+    }
+}
+
 @media (prefers-color-scheme: light) {
     body {
         background-color: #fafafa;

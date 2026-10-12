@@ -2655,24 +2655,25 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                     </div>
                                 </div>
                                 <div id="mainPanelTabPaneDhcp" role="tabpanel" class="tab-pane" style="padding: 10px 0 0 0;">
-                                    <details style="margin-bottom:15px;"><summary onclick="ddiRefreshDhcp();">Distributed DHCP ownership and synchronization</summary>
-                                        <p>Owners use balanced scattered sequences. All enrolled nodes receive allocation state. Overflow requires an acknowledged donor hold.</p>
-                                        <button class="btn btn-default" onclick="ddiRefreshDhcp();">Refresh distributed state</button>
-                                        <p id="ddiDhcpHealth"></p><div id="ddiDhcpState"></div>
-                                        <form id="ddiDhcpBootstrap" class="form-inline" onsubmit="ddiBootstrapDhcp(); return false;">
-                                            <p>Bootstrap requires disabled, drained scopes. Enable serving scopes after every node acknowledges the plan. Ownership changes require a future fenced migration workflow.</p>
+                                    <details class="ddi-shared-dhcp" style="margin-bottom:15px;"><summary onclick="ddiRefreshDhcp();">Shared DHCP</summary>
+                                        <button class="btn btn-default" style="margin-top:10px;" onclick="ddiRefreshDhcp();">Refresh status</button>
+                                        <p id="ddiDhcpHealth" role="status" aria-live="polite"></p><div id="ddiDhcpState"></div>
+                                        <details id="ddiDhcpBootstrap" style="margin-top:15px;"><summary>Set up a shared scope</summary>
+                                        <form class="form-inline" onsubmit="ddiBootstrapDhcp(); return false;">
+                                            <p>Stop the scope and clear leases on all serving servers before setup. Start the scopes after all servers confirm.</p>
                                             <label>Scope <input id="ddiDhcpScope" class="form-control" required /></label>
-                                            <label>Owner node names <input id="ddiDhcpOwners" class="form-control" required placeholder="east-a.example,east-b.example,west-a.example" /></label>
-                                            <p>Optional HA pairs: add the local pair first, then regional recovery pairs.</p>
+                                            <label>Serving servers <input id="ddiDhcpOwners" class="form-control" required placeholder="east-a.example,east-b.example,west-a.example" /></label>
+                                            <p>HA pairs are optional. List the local pair before regional recovery pairs.</p>
                                             <div class="table-responsive"><table class="table"><thead><tr><th>Group</th><th>Region</th><th>Primary</th><th>Secondary</th><th></th></tr></thead><tbody id="ddiDhcpGroupRows"></tbody></table></div>
                                             <button id="ddiDhcpAddGroup" class="btn btn-default" type="button" onclick="ddiAddHaGroup();">Add HA pair</button>
-                                            <button class="btn btn-primary" type="submit">Install ownership plan</button>
-                                        </form>
+                                            <button class="btn btn-primary" type="submit">Set up scope</button>
+                                        </form></details>
+                                        <details style="margin-top:15px;"><summary>Lease history</summary>
                                         <form class="form-inline" onsubmit="ddiLookupHistory(); return false;">
-                                            <label>Historical address <input id="ddiHistoryAddress" class="form-control" required /></label>
-                                            <label>UTC timestamp <input id="ddiHistoryTime" class="form-control" required placeholder="2026-10-12T12:00:00Z" /></label>
-                                            <button class="btn btn-default" type="submit">Find observed lease owner</button>
-                                        </form><div id="ddiHistoryResult"></div>
+                                            <label>Address <input id="ddiHistoryAddress" class="form-control" required /></label>
+                                            <label>Time (UTC) <input id="ddiHistoryTime" class="form-control" required placeholder="2026-10-12T12:00:00Z" /></label>
+                                            <button class="btn btn-default" type="submit">Find lease</button>
+                                        </form><div id="ddiHistoryResult" role="status" aria-live="polite"></div></details>
                                     </details>
 
                                     <ul class="nav nav-tabs" role="tablist">

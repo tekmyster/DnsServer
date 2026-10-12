@@ -77,6 +77,59 @@ static class DistributedDhcpChecks
             await second.DisposeAsync();
             await using var donorRestart = new DistributedAllocation(Path.Combine(folder, "second.json")) { NodeName = () => "east-b" };
             Check(!donorRestart.Available("lab", donation), "Restart discarded donor hold");
+            uint transferred = selections[0][5], quarantined = selections[0][6], pendingTransfer = selections[0][7];
+            east.Commit("lab", transferred, "1-0210", "02-10", "moved", expiry);
+            east.Hold("lab", quarantined, "1-0211", "02-11", "declined", expiry); east.Decline("lab", quarantined, "1-0211");
+            east.Hold("lab", pendingTransfer, "1-0212", "02-12", "pending", expiry);
+            long handoffSequence = east.Snapshot().Replicas.Single(r => r.Scope == "lab" && r.Node == "east-a").Sequence;
+            string handoffId = Guid.NewGuid().ToString("N"); byte[] beforeHandoff = east.Export();
+            Reject(() => east.Handoff("lab", [transferred], "west-a", handoffId, handoffSequence - 1), "Stale handoff snapshot accepted");
+            Reject(() => east.Handoff("lab", [transferred, selections[2][0]], "west-a", handoffId, handoffSequence), "Batch surrender accepts another owner's address");
+            Check(east.HasAuthority("lab", transferred), "Rejected batch partially surrendered authority");
+            east.Handoff("lab", [transferred, quarantined, pendingTransfer], "west-a", handoffId, handoffSequence);
+            byte[] afterHandoff = east.Export();
+            east.Handoff("lab", [pendingTransfer, transferred, quarantined], "west-a", handoffId, handoffSequence);
+            Check(east.Export().SequenceEqual(afterHandoff), "Lost-response retry changed durable handoff");
+            Check(!east.HasAuthority("lab", transferred) && east.FindLease("lab", "1-0210") is null, "Donor retains surrendered lease authority");
+            Reject(() => east.Commit("lab", transferred, "1-0210", "02-10", "moved", expiry), "Donor issues an ACK after surrender");
+            Check(!west.HasAuthority("lab", transferred), "Receiver acquires authority without donor acknowledgement");
+            west.Merge(afterHandoff); west.Merge(beforeHandoff);
+            Check(west.FindLease("lab", "1-0210")?.Address == transferred && west.FindLease("lab", "1-0210")?.Expires == expiry, "Receiver cannot recover the original lease lifetime");
+            Check(west.ResolveLive(transferred)?.Node == "west-a" && west.ResolveLive(transferred)?.Lease.Client == "1-0210", "Shared DNS identity disappears during handoff");
+            Check(!west.Available("lab", transferred, "new-client") && west.Available("lab", transferred, "1-0210"), "Live surrendered lease can be reassigned to a different client");
+            Check(!west.Available("lab", quarantined, "1-0211"), "Handoff drops the declined-address quarantine");
+            Check(west.FindOffer("lab", "1-0212")?.Address == pendingTransfer && !west.Available("lab", pendingTransfer, "new-client"), "Handoff drops a pending offer");
+            DateTime transferredAt = east.Snapshot().Replicas.Single(r => r.Node == "east-a").History.First(h => h.After.Address == transferred && h.After.State == "Grant").Timestamp;
+            Check(west.ResolveAt(transferred, transferredAt)?.Node == "west-a", "Historical attribution has a gap before the receiver's first ACK");
+            string receiverCopy = Path.Combine(folder, "receiver-restart.json"); File.WriteAllBytes(receiverCopy, west.Export()); File.Copy(Path.Combine(folder, "west.json.required"), receiverCopy + ".required");
+            await using (var restartedReceiver = new DistributedAllocation(receiverCopy) { NodeName = () => "west-a" })
+            {
+                Check(restartedReceiver.FindLease("lab", "1-0210")?.Expires == expiry && !restartedReceiver.Available("lab", quarantined, "1-0211"), "Receiver restart drops inherited lease or quarantine protection");
+                restartedReceiver.Release("lab", transferred, "1-0210");
+                Check(restartedReceiver.FindLease("lab", "1-0210") is null, "Release before first recipient ACK does not clear inherited lease");
+                restartedReceiver.Decline("lab", pendingTransfer, "1-0212");
+                Check(restartedReceiver.Snapshot().Replicas.Single(r => r.Node == "west-a").Entries.Single(e => e.Address == pendingTransfer).State == "Declined" && !restartedReceiver.Available("lab", pendingTransfer, "1-0212"), "Decline before first recipient ACK does not quarantine the inherited offer");
+            }
+            string donorCopy = Path.Combine(folder, "donor-handoff-restart.json"); File.WriteAllBytes(donorCopy, east.Export()); File.Copy(Path.Combine(folder, "east.json.required"), donorCopy + ".required");
+            await using (var restartedDonor = new DistributedAllocation(donorCopy) { NodeName = () => "east-a" })
+                Check(!restartedDonor.HasAuthority("lab", transferred), "Donor restart restores surrendered authority");
+            uint reservedAddress = Ip("10.77.0.10");
+            var reservationPlan = plan with { Scope = "reservation-handoff", Epoch = Guid.NewGuid().ToString("N"), First = reservedAddress, Last = reservedAddress, Excluded = [], Reservations = [new(reservedAddress, "1-0214")] };
+            string reservationOwner = new AllocationSequence(reservationPlan).Owner(reservedAddress);
+            string reservationReceiver = plan.Owners.First(n => n != reservationOwner);
+            await using var reservationDonor = new DistributedAllocation(Path.Combine(folder, "reservation-donor.json")) { NodeName = () => reservationOwner };
+            await using var reservationTarget = new DistributedAllocation(Path.Combine(folder, "reservation-target.json")) { NodeName = () => reservationReceiver };
+            reservationDonor.AddPlan(reservationPlan); reservationTarget.AddPlan(reservationPlan);
+            reservationDonor.Handoff(reservationPlan.Scope, [reservedAddress], reservationReceiver, Guid.NewGuid().ToString("N"), 0);
+            reservationTarget.Merge(reservationDonor.Export());
+            Check(reservationTarget.Available(reservationPlan.Scope, reservedAddress, "1-0214") && !reservationTarget.Available(reservationPlan.Scope, reservedAddress, "other"), "Reservation handoff loses its fixed client binding");
+            reservationTarget.Commit(reservationPlan.Scope, reservedAddress, "1-0214", "02-14", "reserved", expiry);
+            Check(!reservationDonor.Available(reservationPlan.Scope, reservedAddress, "1-0214") && reservationTarget.FindLease(reservationPlan.Scope, "1-0214")?.Address == reservedAddress, "Transferred reservation has duplicate ACK authority");
+            west.Commit("lab", transferred, "1-0210", "02-10", "moved", DateTime.UtcNow.AddMinutes(1));
+            Check(west.FindLease("lab", "1-0210")?.Expires == expiry, "Receiver shortens a previously acknowledged lifetime");
+            west.Release("lab", transferred, "1-0210");
+            west.Hold("lab", selections[2][1], "1-0213", "02-13", "unrelated", expiry);
+            Check(west.FindLease("lab", "1-0210") is null && west.ResolveLive(transferred) is null, "Compaction resurrects a released inherited lease");
             string lostPath = Path.Combine(folder, "lost.json"); File.WriteAllText(lostPath + ".required", "1");
             Reject(() => new DistributedAllocation(lostPath), "Missing authoritative allocation file fell back to legacy DHCP");
             uint contested = selections[0][1]; int successes = 0;
@@ -134,6 +187,14 @@ static class DistributedDhcpChecks
             Check(durable is not null && durable.State == "Lease", "Actual ACK hook did not durably commit");
             using var freshScopeA = NewScope(serverA);
             Check((await Offer(freshScopeA, 1)).Address.Equals(allOffers[0].Address), "Crash recovery changed a still-active client's address");
+            string packetHandoffId = Guid.NewGuid().ToString("N");
+            storeA.Handoff("packets", [durable.Address], "east-b", packetHandoffId, storeA.Snapshot().Replicas.Single(r => r.Node == "east-a").Sequence);
+            storeB.Merge(storeA.Export());
+            using var receivingScope = NewScope(serverB);
+            var inheritedLease = receivingScope.GetExistingLeaseOrOffer((DhcpMessage)Discover(1));
+            Check(inheritedLease?.Address.Equals(allOffers[0].Address) == true, "Actual recipient REQUEST hook loses the handed-off client");
+            receivingScope.CommitLease(inheritedLease);
+            Check(storeB.FindLease("packets", "1-020000000001")?.Address == durable.Address && !scopeA.CanRespondToDistributedRequest(allOffers[0].Address), "Recipient ACK does not persist exclusive authority");
 
             // A second lab demonstrates own-sequence exhaustion followed by acknowledged overflow.
             using var overflowScopeA = new Scope("overflow", false, IPAddress.Parse("203.0.113.10"), IPAddress.Parse("203.0.113.21"), IPAddress.Parse("255.255.255.0"), log, serverA) { DnsUpdates = false, IgnoreClientIdentifierOption = true };

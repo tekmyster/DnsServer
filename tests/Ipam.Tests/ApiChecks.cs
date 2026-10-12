@@ -114,6 +114,7 @@ static class ApiChecks
             reader.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", readerLogin.GetProperty("token").GetString());
             Check((await Call(reader, "/api/ipam/list")).GetProperty("status").GetString() == "error", "IPAM inventory leaked to user without Settings access");
             Check((await Call(reader, "/api/ipam/views/set", ("revision", "5"), ("name", "Forbidden"))).GetProperty("status").GetString() == "error", "Unauthorized IPAM modification allowed");
+            Check((await Call(reader, "/api/ddi/dhcp/handoff", ("scope", "Default"))).GetProperty("status").GetString() == "error", "Unprivileged user can surrender DHCP ownership");
             Check((await Call(fresh, "/api/ipam/list")).GetProperty("status").GetString() == "ok", "Fresh admin access lost after lab changes");
             var securityGet = await Call(original, "/api/security/policy/get");
             Check(securityGet.GetProperty("status").GetString() == "ok" && !securityGet.GetProperty("response").GetProperty("policy").GetProperty("enabled").GetBoolean(), "Security default changes existing DNS behavior");

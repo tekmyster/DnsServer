@@ -763,6 +763,7 @@ namespace DnsServerCore.Dhcp
 
         internal void AddDnsEntries(Scope scope, Lease lease)
         {
+            if (Allocation?.Plan(scope.Name) is not null && !Allocation.HasAuthority(scope.Name, AllocationSequence.Number(lease.Address))) return;
             if (lease.Type == LeaseType.Reserved)
             {
                 string reservedLeaseHostName = lease.HostName;
@@ -783,6 +784,9 @@ namespace DnsServerCore.Dhcp
 
         internal void RemoveDnsEntries(Scope scope, Lease lease, bool force = false)
         {
+            // Old local lease objects can outlive a planned transfer. Their cleanup must not
+            // delete DNS records now maintained by the receiving owner.
+            if (Allocation?.Plan(scope.Name) is not null && !Allocation.HasAuthority(scope.Name, AllocationSequence.Number(lease.Address))) return;
             if (lease.Type == LeaseType.Reserved)
             {
                 string reservedLeaseHostName = lease.HostName;

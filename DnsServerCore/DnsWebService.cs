@@ -2282,6 +2282,7 @@ namespace DnsServerCore
             _webService.MapPost("/api/ddi/dhcp/state/ingest", IngestAllocationState);
             _webService.MapPost("/api/ddi/dhcp/plan/set", SetAllocationPlan);
             _webService.MapPost("/api/ddi/dhcp/grant", GrantAllocation);
+            _webService.MapPost("/api/ddi/dhcp/handoff", HandoffAllocation);
             _webService.MapPost("/api/ddi/dhcp/prepare", PrepareAllocation);
             _webService.MapGetAndPost("/api/ddi/dhcp/history/lookup", LookupAllocationHistory);
             _webService.MapGetAndPost("/api/ipam/netbox/settings/get", GetNetBoxSettings);
@@ -2413,6 +2414,7 @@ namespace DnsServerCore
                 case "/api/security/signals/ingest":
                 case "/api/ddi/dhcp/state/ingest":
                 case "/api/ddi/dhcp/grant":
+                case "/api/ddi/dhcp/handoff":
                 case "/api/ddi/dhcp/prepare":
                     return ClusterNodeType.Secondary; //this api must be called on current node
 

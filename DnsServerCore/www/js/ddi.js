@@ -1,28 +1,89 @@
 var ddiNetBoxPreview = null;
 var ddiDhcpNodes = [];
-function ddiRequest(path, method, data, success) {
-    HTTPRequest({ url: '/api/' + path, method: method, data: data || {}, token: sessionData.token, success: success, invalidToken: showPageLogin });
+function ddiRequest(path, method, data, success, error, alerts) {
+    HTTPRequest({ url: '/api/' + path, method: method, data: data || {}, token: sessionData.token, success: success, error: error, objAlertPlaceholder: alerts, invalidToken: showPageLogin });
+}
+function ddiAddress(number) { return [24, 16, 8, 0].map(function (shift) { return (number >>> shift) & 255; }).join('.'); }
+function ddiLeaseState(state) { return { Lease: 'Active lease', Offer: 'Pending offer', Declined: 'Quarantined', Grant: 'Transferred', Released: 'Released' }[state] || 'Unknown'; }
+function ddiActiveLeaseCount(data, scope, owner) {
+    var local = data.state.replicas.find(function (r) { return r.scope === scope && r.node === owner; }), entries = local ? local.entries : [], count = entries.filter(function (e) { return e.state === 'Lease' && new Date(e.expires) > new Date(); }).length;
+    data.state.replicas.filter(function (r) { return r.scope === scope && r.node !== owner; }).forEach(function (r) {
+        count += r.entries.filter(function (e) { return e.state === 'Grant' && e.borrower === owner && e.protection && e.protection.state === 'Lease' && new Date(e.protection.expires) > new Date() && !entries.some(function (own) { return own.address === e.address; }); }).length;
+    }); return count;
 }
 function ddiRefreshDhcp() {
+    $('#ddiDhcpHealth').text('Loading DHCP status…');
     ddiRequest('ddi/dhcp/state/get', 'GET', {}, function (response) {
         var data = response.response, target = $('#ddiDhcpState').empty();
         ddiDhcpNodes = data.nodes || [data.node]; $('#ddiDhcpAddGroup').prop('disabled', ddiDhcpNodes.length < 2);
         if (!$('#ddiDhcpOwners').val()) $('#ddiDhcpOwners').val(ddiDhcpNodes.join(','));
-        $('#ddiDhcpHealth').text(data.node + ': ' + data.health);
+        var health = data.health.indexOf('recovery') >= 0 || data.health.indexOf('Recovery') >= 0 ? 'Recovery required' : data.health.indexOf('failed') >= 0 ? 'Sync interrupted' : data.health.indexOf('completed') >= 0 ? 'Last sync completed' : 'Sync not started';
+        $('#ddiDhcpHealth').text(data.node + ' · ' + health);
         $('#ddiDhcpBootstrap').toggle(sessionData.info.permissions.DhcpServer.canModify);
         data.state.plans.forEach(function (plan) {
-            target.append($('<h5>').text(plan.scope + ' — epoch ' + plan.epoch + ' — owners: ' + plan.owners.join(', ')));
+            target.append($('<h4>').text(plan.scope));
             var configuration = (data.state.configurations || []).find(function (c) { return c.scope === plan.scope; });
             var status = (data.scopeStatus || []).find(function (s) { return s.scope === plan.scope; });
-            target.append($('<p>').text('Configuration revision ' + (configuration ? configuration.revision : 'bootstrap') + '; local listener ' + (status && status.enabled ? 'enabled' : 'disabled') + '; ownership ' + (status && status.matchesOwnership ? 'matches' : 'missing or drifted')));
-            var list = $('<ul>');
+            target.append($('<p>').text(status && status.matchesOwnership ? (status.enabled ? 'Serving on this server' : 'Stopped on this server') : 'Configuration needs attention. Restore the scope to its shared address settings before serving.'));
+            var table = $('<table>').addClass('table table-condensed'), body = $('<tbody>'), diagnostics = $('<details>').append($('<summary>').text('Synchronization details'));
+            table.append($('<thead>').append($('<tr>').append($('<th>').text('Server')).append($('<th>').text('Active leases')).append($('<th>').text('Transferred addresses')))).append(body);
+            diagnostics.append($('<p>').text('Ownership version: ' + plan.epoch + ' · Settings revision: ' + (configuration ? configuration.revision : 'initial')));
             plan.owners.forEach(function (owner) {
                 var replica = data.state.replicas.find(function (r) { return r.scope === plan.scope && r.node === owner; });
-                list.append($('<li>').text(owner + ': ' + (replica ? 'sequence ' + replica.sequence + ', ' + replica.entries.filter(function (e) { return e.state === 'Lease'; }).length + ' lease records, ' + replica.entries.filter(function (e) { return e.state === 'Grant'; }).length + ' permanent donor holds' : 'no allocation snapshot received')));
-            }); target.append(list);
+                var activeCount = ddiActiveLeaseCount(data, plan.scope, owner);
+                body.append($('<tr>').append($('<td>').text(owner)).append($('<td>').text(replica || activeCount ? activeCount : 'Awaiting sync')).append($('<td>').text(replica ? replica.entries.filter(function (e) { return e.state === 'Grant'; }).length : '—')));
+                diagnostics.append($('<p>').text(owner + ' · Last change: ' + (replica ? replica.sequence : 'not received')));
+            }); target.append($('<div>').addClass('table-responsive').append(table)).append(diagnostics);
+            if (sessionData.info.permissions.DhcpServer.canModify) ddiRenderHandoff(target, plan, data);
         });
-        if (!data.state.plans.length) target.append($('<p>').text('No distributed scopes configured.'));
-    });
+        if (!data.state.plans.length) target.append($('<p>').text('No shared scopes yet. Set up a scope to synchronize DHCP across servers.'));
+    }, function () { $('#ddiDhcpHealth').text('Status unavailable. Refresh to try again.'); });
+}
+function ddiRenderHandoff(target, plan, data) {
+    if (plan.owners.length < 2) return;
+    var local = data.state.replicas.find(function (r) { return r.scope === plan.scope && r.node === data.node; });
+    if (!local) return;
+    var transferable = local.entries.filter(function (e) { return !e.authorityOwner && ['Lease', 'Offer', 'Declined'].indexOf(e.state) >= 0 && new Date(e.expires) > new Date(); }).slice(0, 256);
+    if (!transferable.length) return;
+    var details = $('<details>').css('margin-top', '15px').append($('<summary>').text('Transfer addresses'));
+    var form = $('<form>'), receiver = $('<select>').addClass('form-control'), choices = $('<div>'), output = $('<p>').attr({ role: 'status', 'aria-live': 'polite' }), button = $('<button>').attr('type', 'submit').addClass('btn btn-primary').text('Review transfer'), request = null, reviewed = false;
+    var review = $('<div>').hide(), back = $('<button>').attr('type', 'button').addClass('btn btn-default').text('Back').hide(), alerts = $('<div>'), technical = $('<details>').append($('<summary>').text('Technical details')).append(alerts).hide();
+    plan.owners.filter(function (n) { return n !== data.node; }).forEach(function (n) { receiver.append($('<option>').val(n).text(n)); });
+    form.append($('<p>').text('Move selected addresses to another server. Existing clients keep their lease expiry.'));
+    var table = $('<table>').addClass('table table-hover table-condensed'), body = $('<tbody>');
+    table.append($('<thead>').append($('<tr>').append($('<th>').text('Select')).append($('<th>').text('Address')).append($('<th>').text('Device')).append($('<th>').text('Status')).append($('<th>').text('Expires')))).append(body);
+    transferable.forEach(function (e) { var address = ddiAddress(e.address); body.append($('<tr>').append($('<td>').append($('<input>').attr({ type: 'checkbox', value: address, 'aria-label': 'Select ' + address }))).append($('<td>').text(address)).append($('<td>').text(e.host || e.hardware || e.client)).append($('<td>').text(ddiLeaseState(e.state))).append($('<td>').text(new Date(e.expires).toLocaleString()))); });
+    choices.append($('<div>').addClass('table-responsive').append(table));
+    var receiverLabel = $('<label>').text('Receiving server').css('display', 'block').append(receiver);
+    form.append(choices).append($('<div>').addClass('form-group').css('max-width', '360px').append(receiverLabel)).append(review).append(button).append(document.createTextNode(' ')).append(back).append(output).append(technical);
+    back.on('click', function () { reviewed = false; request = null; review.hide(); back.hide(); choices.find('input').prop('disabled', false); receiver.prop('disabled', false); button.text('Review transfer').trigger('focus'); });
+    form.on('submit', function (event) {
+        event.preventDefault();
+        if (!request) {
+            var addresses = choices.find('input:checked').map(function () { return this.value; }).get();
+            if (!addresses.length) { output.text('Select at least one address.'); return; }
+            var bytes = new Uint8Array(16); window.crypto.getRandomValues(bytes);
+            request = { scope: plan.scope, addresses: addresses.join(','), receiver: receiver.val(), expectedSequence: local.sequence, requestId: Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('') };
+            choices.find('input').prop('disabled', true); receiver.prop('disabled', true);
+        }
+        if (!reviewed) {
+            reviewed = true;
+            var count = request.addresses.split(',').length;
+            review.empty().show().append($('<p>').text(count + (count === 1 ? ' address will' : ' addresses will') + ' move from ' + data.node + ' to ' + request.receiver + '.')).append($('<p>').addClass('text-warning').text('This server will stop assigning these addresses. Returning them is not yet supported.'));
+            back.show(); button.text('Transfer addresses').trigger('focus'); output.text(''); return;
+        }
+        back.hide(); button.prop('disabled', true).text('Transferring…'); output.text('Waiting for both servers to confirm the transfer.');
+        ddiRequest('ddi/dhcp/handoff', 'POST', request, function (response) {
+            review.hide();
+            if (response.response.receiverAcknowledged) { output.text('Transfer complete. Refresh DHCP status to see the updated addresses.'); button.text('Transferred'); }
+            else { output.text('Addresses released by this server. The receiving server has not confirmed; retry delivery when its connection returns.'); button.prop('disabled', false).text('Retry delivery'); }
+        }, function () {
+            technical.show();
+            var stale = alerts.text().indexOf('Owner state changed') >= 0;
+            output.text(stale ? 'The lease list changed. Refresh DHCP status before trying again.' : 'Transfer could not be confirmed. Retry the same transfer when the connection returns.');
+            button.prop('disabled', stale).text(stale ? 'Refresh required' : 'Retry transfer');
+        }, alerts);
+    }); details.append(form); target.append(details);
 }
 function ddiBootstrapDhcp() {
     var groups = [];

@@ -3,11 +3,11 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Numerics;
 
+if (args.Contains("--transport")) { await DistributedTransportChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--api") || args.Contains("--serve")) { await ApiChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--security")) { await SecurityChecks.Run(); return; }
 if (args.Contains("--dhcp")) { await DistributedDhcpChecks.Run(); return; }
 if (args.Contains("--netbox")) { await NetBoxChecks.Run(); return; }
-if (args.Contains("--transport")) { await DistributedTransportChecks.Run(); return; }
 if (args.Contains("--security-ops")) { await SecurityOperationsChecks.Run(); return; }
 
 string folder = Path.Combine(Path.GetTempPath(), "ddi-ipam-tests-" + Guid.NewGuid().ToString("N"));

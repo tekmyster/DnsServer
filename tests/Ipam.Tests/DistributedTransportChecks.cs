@@ -15,7 +15,25 @@ using TechnitiumLibrary.Net.Dns.ResourceRecords;
 
 static class DistributedTransportChecks
 {
-    static int Port() { var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop(); return port; }
+    static int Port()
+    {
+        // DNS uses both transports; Windows can reserve a UDP port while TCP remains available.
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            try
+            {
+                listener.Start();
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                using var udp = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                udp.Bind(new IPEndPoint(IPAddress.Loopback, port));
+                return port;
+            }
+            catch (SocketException) { }
+            finally { listener.Stop(); }
+        }
+        throw new IOException("Could not find a loopback port available for both TCP and UDP.");
+    }
     sealed class PinnedHandler : HttpClientHandler
     {
         public bool Disconnected;

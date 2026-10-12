@@ -60,6 +60,8 @@ DHCP synchronization across three or more servers is a core requirement for the 
 
 ## Security and operational requirements
 
+Dynamic DHCP allocation uses balanced, scattered candidate sequences generated from a shared permutation and stable serving membership. Each server exhausts its own sequence before entering overflow. Borrowing an address from another sequence requires a durable coordinated claim with the original owner; all nodes receive the resulting lease and grant updates. Previously granted addresses remain protected during outages. New borrowing cannot proceed from stale replicated state alone. This preserves independent local service without allowing simultaneous conflicting allocations.
+
 Scope administrative permissions to relevant sites, network views, and operations. Protect node enrollment and policy distribution with authenticated identities and replay protection. Feed fetchers need explicit limits on size, parsing time, redirects, and destination access. Do not log authentication tokens or integration secrets.
 
 Record actor, source, operation, affected object, before and after values, outcome, and correlation identifier for management changes. Export audit records to an independently controlled destination when stronger retention or tamper resistance is required.

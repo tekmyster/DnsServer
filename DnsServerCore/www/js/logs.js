@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -119,13 +119,13 @@ function refreshLogFilesList(selectedFileName) {
         success: function (responseJSON) {
             var logFiles = responseJSON.response.logFiles;
 
-            var list = "<div class=\"log\" style=\"font-size: 14px; padding-bottom: 6px;\"><a href=\"#\" onclick=\"deleteAllStats(); return false;\"><b>[delete all stats]</b></a></div>";
+            var list = "<div class=\"log\" style=\"font-size: 14px; padding-bottom: 6px;\"><a href=\"#\" onclick=\"deleteAllStats(); return false;\"><b>Delete statistics</b></a></div>";
 
             if (logFiles.length == 0) {
                 list += "<div class=\"log\">No Log File Was Found</div>";
             }
             else {
-                list += "<div class=\"log\" style=\"font-size: 14px; padding-bottom: 6px;\"><a href=\"#\" onclick=\"deleteAllLogs(); return false;\"><b>[delete all logs]</b></a></div>";
+                list += "<div class=\"log\" style=\"font-size: 14px; padding-bottom: 6px;\"><a href=\"#\" onclick=\"deleteAllLogs(); return false;\"><b>Delete logs</b></a></div>";
 
                 for (var i = 0; i < logFiles.length; i++) {
                     var logFile = logFiles[i];

@@ -131,14 +131,17 @@ function ddiPreviewNetBox() {
     ddiRequest('ipam/netbox/preview', 'POST', {}, function (response) {
         ddiNetBoxPreview = response.response.preview;
         var output = $('#ddiNetBoxPreview').empty(), list = $('<ul>');
-        output.append($('<p>').text('Inventory revision ' + ddiNetBoxPreview.inventoryRevision + '; preview ' + ddiNetBoxPreview.id));
+        output.append($('<p>').text(ddiNetBoxPreview.changes.length + ' objects reviewed.'));
+        output.append($('<details>').append($('<summary>').text('Publication details')).append($('<p>').text('Inventory revision: ' + ddiNetBoxPreview.inventoryRevision + ' · Preview reference: ' + ddiNetBoxPreview.id)));
         ddiNetBoxPreview.changes.forEach(function (c) {
             var fields = JSON.parse(c.fields), item = $('<li>').text(c.operation + ': ' + (fields.prefix || fields.address) + ' — ' + (fields.dns_name || fields.description || '') + ' — VRF ' + (fields.vrf == null ? 'global' : fields.vrf) + ' — ' + c.reason);
             if (c.operation === 'Update' && c.before) {
                 var previous = JSON.parse(c.before), diff = $('<ul>');
                 Object.keys(fields).forEach(function (name) {
                     var before = previous[name]; if (name === 'vrf' && before) before = before.id; if (name === 'status' && before && typeof before === 'object') before = before.value;
-                    if (JSON.stringify(before) !== JSON.stringify(fields[name])) diff.append($('<li>').text(name + ': ' + JSON.stringify(before) + ' → ' + JSON.stringify(fields[name])));
+                    var labels = { prefix: 'Prefix', address: 'Address', vrf: 'VRF', status: 'Status', dns_name: 'Hostname', description: 'Description', comments: 'Management marker' };
+                    var display = function (value) { return value == null ? 'Not set' : typeof value === 'string' && value.indexOf('DDI:') === 0 ? 'Managed by DDI' : productLabel(String(value)); };
+                    if (JSON.stringify(before) !== JSON.stringify(fields[name])) diff.append($('<li>').text((labels[name] || name) + ': ' + display(before) + ' → ' + display(fields[name])));
                 }); item.append(diff);
             }
             list.append(item);

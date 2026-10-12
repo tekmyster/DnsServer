@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -40,7 +40,7 @@ function refreshApps() {
             if (apps.length > 0)
                 $("#tableAppsFooter").html("<tr><td colspan=\"3\"><b>Total Apps: " + apps.length + "</b></td></tr>");
             else
-                $("#tableAppsFooter").html("<tr><td colspan=\"3\" align=\"center\">No Apps Found</td></tr>");
+                $("#tableAppsFooter").html("<tr><td colspan=\"3\" align=\"center\">No applications installed.</td></tr>");
 
             divViewAppsLoader.hide();
             divViewApps.show();
@@ -177,7 +177,7 @@ function showStoreAppsModal() {
             if (storeApps.length > 0)
                 $("#tableStoreAppsFooter").html("<tr><td colspan=\"3\"><b>Total Apps: " + storeApps.length + "</b></td></tr>");
             else
-                $("#tableStoreAppsFooter").html("<tr><td colspan=\"3\" align=\"center\">No Apps Found</td></tr>");
+                $("#tableStoreAppsFooter").html("<tr><td colspan=\"3\" align=\"center\">No applications available.</td></tr>");
 
             divStoreAppsLoader.hide();
             divStoreApps.show();
@@ -453,7 +453,7 @@ function updateAppsFooterCount() {
     if (totalApps > 0)
         $("#tableAppsFooter").html("<tr><td colspan=\"3\"><b>Total Apps: " + totalApps + "</b></td></tr>");
     else
-        $("#tableAppsFooter").html("<tr><td colspan=\"3\" align=\"center\">No App Found</td></tr>");
+        $("#tableAppsFooter").html("<tr><td colspan=\"3\" align=\"center\">No applications installed.</td></tr>");
 }
 
 function showAppConfigModal(objBtn, appName) {

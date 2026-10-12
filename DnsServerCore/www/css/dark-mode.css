@@ -58,6 +58,12 @@ body.dark-mode {
     color: #dcdcdc !important;
 }
 
+body.dark-mode a:not(.btn):not(.label), body.dark-mode a:not(.btn):not(.label):visited,
+.dark-mode #footer .content a {
+    color: #9dc5ff;
+}
+.dark-mode .text-muted, .dark-mode .help-block { color: #ababab !important; }
+
 .dark-mode th a,
 .dark-mode th a:hover {
     color: #dcdcdc !important;

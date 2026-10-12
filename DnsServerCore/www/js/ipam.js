@@ -1,8 +1,8 @@
 var ipamInventory = null;
 
-function ipamRequest(path, method, data, success) {
+function ipamRequest(path, method, data, success, error) {
     HTTPRequest({ url: "/api/ipam/" + path, method: method, data: data || {}, token: sessionData.token,
-        success: success, invalidToken: showPageLogin });
+        success: success, error: error, invalidToken: showPageLogin });
 }
 
 function ipamOptions(selector, entries, label) {
@@ -13,12 +13,13 @@ function ipamOptions(selector, entries, label) {
 }
 
 function refreshIpam() {
+    $('#ipamRevision').text('Loading inventory…');
     ipamRequest("list", "GET", {}, function (response) {
         ipamInventory = response.response.inventory;
         var permissions = sessionData.info.permissions.Settings;
         $("#ddiNetBoxPanel").toggle(sessionData.info.permissions.Administration.canModify && permissions.canModify);
         $(".ipam-edit").toggle(permissions.canModify);
-        $("#ipamRevision").text("Inventory revision " + ipamInventory.revision);
+        $("#ipamRevision").text(productCount(ipamInventory.subnets.length, 'network') + ' · ' + productCount(ipamInventory.assignments.length, 'address assignment'));
         ipamOptions("#ipamView", ipamInventory.views, function (v) { return v.name; });
         ipamOptions("#ipamSubnet", ipamInventory.subnets.filter(function (s) { return !s.container; }), function (s) { return s.name + " — " + s.prefix; });
         ipamOptions("#ipamInspectSubnet", ipamInventory.subnets.filter(function (s) { return !s.container; }), function (s) {
@@ -34,10 +35,12 @@ function refreshIpam() {
             if (permissions.canModify) actions.append($('<button class="btn btn-xs btn-default">').text("Edit").on('click', function () {
                 $('#ipamSubnetId').val(s.id); $('#ipamView').val(s.viewId); $('#ipamPrefix').val(s.prefix); $('#ipamSubnetName').val(s.name);
                 $('#ipamSite').val(s.site); $('#ipamVlan').val(s.vlan || ''); $('#ipamDhcpScope').val(s.dhcpScope); $('#ipamDnsZone').val(s.dnsZone); $('#ipamContainer').prop('checked', s.container);
+                $('#ipamNetworkEditor').prop('open', true); $('#ipamPrefix').trigger('focus');
             }));
             if (permissions.canDelete) actions.append($('<button class="btn btn-xs btn-danger">').text("Delete").on('click', function () { ipamDelete('subnet', s.id); }));
             row.append(actions); table.append(row);
         });
+        productEmptyRow(table, 9, 'No networks yet. Add an IPv4 or IPv6 subnet to start your inventory.');
         var assignments = $("#ipamAssignmentsBody").empty();
         ipamInventory.assignments.forEach(function (a) {
             var row = $('<tr>');
@@ -47,14 +50,20 @@ function refreshIpam() {
             if (permissions.canModify) actions.append($('<button class="btn btn-xs btn-default">').text("Edit").on('click', function () {
                 $('#ipamAssignmentId').val(a.id); $('#ipamSubnet').val(a.subnetId); $('#ipamAddress').val(a.address); $('#ipamHostName').val(a.hostName);
                 $('#ipamOwner').val(a.owner); $('#ipamStatus').val(a.status); $('#ipamDescription').val(a.description);
+                $('#ipamAssignmentEditor').prop('open', true); $('#ipamAddress').trigger('focus');
             }));
             if (permissions.canDelete) actions.append($('<button class="btn btn-xs btn-danger">').text("Delete").on('click', function () { ipamDelete('assignment', a.id); }));
             row.append(actions); assignments.append(row);
         });
+        productEmptyRow(assignments, 7, 'No address assignments yet.');
         var history = $('#ipamHistory').empty();
-        ipamInventory.changes.slice(-20).reverse().forEach(function (c) { history.append($('<li>').text(c.timestamp + ' — ' + c.actor + ' — ' + c.operation + ' — revision ' + c.revision)); });
+        ipamInventory.changes.slice(-20).reverse().forEach(function (c) { history.append($('<li>').text(productTime(c.timestamp) + ' · ' + c.actor + ' · ' + productLabel(c.operation))); });
         $('#ipamInspection').empty();
-    });
+    }, function () { $('#ipamRevision').text('Inventory unavailable. Refresh to try again.'); });
+}
+function ipamNew(kind) {
+    var input = document.getElementById(kind === 'subnet' ? 'ipamPrefix' : 'ipamAddress');
+    input.form.reset(); $(input).trigger('focus');
 }
 
 function ipamSave(kind) {
@@ -93,14 +102,14 @@ function inspectIpam() {
         var output = $('#ipamInspection').empty();
         output.append($('<p>').text(data.utilization.knownUsedAddresses + ' known used / ' + data.utilization.usableAddresses + ' usable addresses. ' + data.utilization.intendedAddresses + ' intended; ' + data.utilization.observedAddresses + ' observed.'));
         var findings = $('<ul>');
-        data.findings.forEach(function (f) { findings.append($('<li>').text(f.address + ' — ' + f.kind + ': ' + f.detail)); });
+        data.findings.forEach(function (f) { findings.append($('<li>').text(f.address + ' — ' + productLabel(f.kind) + ': ' + f.detail)); });
         if (!data.findings.length) findings.append($('<li>').text('No reconciliation findings.'));
         output.append(findings);
         var threats = $('<ul>');
         (data.securityFindings || []).forEach(function (f) { threats.append($('<li>').text(f.address + ' — ' + f.action + ' — ' + f.source + ' — ' + f.reason + ' Indicators: ' + f.indicators.join(', '))); });
         if ((data.securityFindings || []).length) output.append($('<h4>').text('Threat intelligence matches')).append(threats);
         var observations = $('<ul>');
-        data.observations.forEach(function (o) { observations.append($('<li>').text(o.address + ' — ' + o.source + ' — ' + (o.hostName || '') + ' — ' + (o.clientIdentifier || ''))); });
+        data.observations.forEach(function (o) { observations.append($('<li>').text(o.address + ' — ' + productLabel(o.source) + ' — ' + (o.hostName || '') + ' — ' + (o.clientIdentifier || ''))); });
         output.append($('<h4>').text('DNS and DHCP observations')).append(observations);
     });
 }

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 
 <!--
 Technitium DNS Server
@@ -21,6 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
     <meta name="referrer" content="no-referrer" />
 
@@ -54,6 +55,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <script src="js/security.js"></script>
     <script src="js/ddi.js"></script>
     <script src="js/logs.js"></script>
+    <script src="js/product-ux.js"></script>
 </head>
 <body>
     <div id="header">
@@ -68,15 +70,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             <ul class="dropdown-menu">
                 <li><a href="#" onclick="showMyProfileModal(); return false;">My Profile</a></li>
                 <li><a id="mnuUserChangePassword" href="#" onclick="showChangePasswordModal(); return false;">Change Password</a></li>
-                <li><a id="mnuUserConfigure2FA" href="#" onclick="showConfigure2FAModal(); return false;">Configure 2FA</a></li>
+                <li><a id="mnuUserConfigure2FA" href="#" onclick="showConfigure2FAModal(); return false;">Two-factor authentication</a></li>
                 <li><a href="#" onclick="showCreateMyApiTokenModal(); return false;">Create API Token</a></li>
                 <li role="separator" class="divider"></li>
                 <li><a href="#" onclick="showChangeThemeModal(); return false;">Change Theme</a></li>
-                <li><a id="mnuDisableCheckForUpdateNotification" href="#" onclick="disableUpdateNotification(); return false;" style="display: none;">Disable Update Notification</a></li>
-                <li><a id="mnuEnableCheckForUpdateNotification" href="#" onclick="enableUpdateNotification(); return false;" style="display: none;">Enable Update Notification</a></li>
-                <li><a href="#" onclick="checkForUpdate(true); return false;">Check For Update</a></li>
+                <li><a id="mnuDisableCheckForUpdateNotification" href="#" onclick="disableUpdateNotification(); return false;" style="display: none;">Mute update notifications</a></li>
+                <li><a id="mnuEnableCheckForUpdateNotification" href="#" onclick="enableUpdateNotification(); return false;" style="display: none;">Enable update notifications</a></li>
+                <li><a href="#" onclick="checkForUpdate(true); return false;">Check for updates</a></li>
                 <li role="separator" class="divider"></li>
-                <li><a href="#" onclick="logout(); return false;">Logout</a></li>
+                <li><a href="#" onclick="logout(); return false;">Sign out</a></li>
             </ul>
         </div>
     </div>
@@ -107,7 +109,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                             </div>
 
                             <div class="form-group" id="div2FAOTP">
-                                <label for="txt2FATOTP" class="col-sm-3 control-label">Enter OTP</label>
+                                <label for="txt2FATOTP" class="col-sm-3 control-label">Verification code</label>
                                 <div class="col-sm-8">
                                     <input id="txt2FATOTP" type="text" class="form-control" style="width: 100px;" placeholder="OTP" maxlength="6" autocomplete="off">
                                     <div style="padding-top: 5px;">Enter the 6-digit code you see in your authenticator app.</div>
@@ -116,7 +118,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
                             <div class="form-group" style="margin-bottom: 0px;">
                                 <div class="col-sm-offset-3 col-sm-4">
-                                    <button id="btnLogin" type="submit" class="btn btn-primary" style="width: 100px;" data-loading-text="Working..." onclick="login(); return false;">Login</button>
+                                    <button id="btnLogin" type="submit" class="btn btn-primary" style="width: 100px;" data-loading-text="Working..." onclick="login(); return false;">Sign in</button>
                                 </div>
                                 <div class="col-sm-4" style="padding: 6px; text-align: right;">
                                     <a href="#" data-toggle="modal" data-target="#modalForgotPassword">Forgot Password?</a>
@@ -141,7 +143,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                             <h3 class="panel-title">DNS Server<span id="lblDnsServerDomain"></span></h3>
                         </div>
                         <div style="float: right;">
-                            <a href="#" data-toggle="modal" data-target="#modalUpdateAvailable" id="lnkUpdateAvailable" style="display: none; color: red !important;">New Update Available!</a>
+                            <a href="#" data-toggle="modal" data-target="#modalUpdateAvailable" id="lnkUpdateAvailable" style="display: none; color: red !important;">Update available!</a>
                         </div>
                     </div>
 
@@ -721,9 +723,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
 
                                             <div class="panel-body">
-                                                <pre id="preCachedZoneViewerBody">
+                                                <div id="preCachedZoneViewerBody">
 
-                                                </pre>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -761,9 +763,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
 
                                             <div class="panel-body">
-                                                <pre id="preAllowedZoneViewerBody">
+                                                <div id="preAllowedZoneViewerBody">
 
-                                                </pre>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -801,9 +803,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
 
                                             <div class="panel-body">
-                                                <pre id="preBlockedZoneViewerBody">
+                                                <div id="preBlockedZoneViewerBody">
 
-                                                </pre>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -845,7 +847,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             <div class="form-group">
                                                 <label for="txtDnsClientNameServer">Server</label>
                                                 <div class="input-group dropdown">
-                                                    <input type="text" class="form-control dropdown-toggle" style="min-width: 270px; border-right: 0px;" id="txtDnsClientNameServer" value="This Server {this-server}">
+                                                    <input type="text" class="form-control dropdown-toggle" style="min-width: 270px; border-right: 0px;" id="txtDnsClientNameServer" value="This server">
                                                     <ul id="optDnsClientNameServers" class="dropdown-menu" style="max-height: 500px; overflow-y: scroll;">
                                                     </ul>
                                                     <span role="button" class="input-group-addon dropdown-toggle" style="background-color: white;" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><span class="caret"></span></span>
@@ -892,7 +894,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
 
                                             <div class="form-group">
-                                                <label for="optDnsClientProtocol">DNS-over-</label>
+                                                <label for="optDnsClientProtocol">Transport</label>
                                                 <select class="form-control" id="optDnsClientProtocol" style="padding-left: 6px; padding-right: 0px;">
                                                     <option>UDP</option>
                                                     <option>TCP</option>
@@ -937,7 +939,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
                                             <div id="divDnsClientFinalResponseCollapse" class="panel-collapse collapse in" role="tabpanel" aria-labelledby="divDnsClientFinalResponseHeading">
                                                 <div class="panel-body">
-                                                    <pre id="preDnsClientFinalResponse" style="margin-bottom: 0px;"></pre>
+                                                    <div id="preDnsClientFinalResponse" style="margin-bottom: 0px;"></div>
                                                 </div>
                                             </div>
                                         </div>
@@ -946,7 +948,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             <div class="panel-heading" role="tab" id="divDnsClientRawResponsesHeading">
                                                 <h4 class="panel-title">
                                                     <a class="collapsed" role="button" data-toggle="collapse" data-parent="#divDnsClientOutputAccordion" href="#divDnsClientRawResponsesCollapse" aria-expanded="false" aria-controls="divDnsClientRawResponsesCollapse">
-                                                        Raw Responses (<span id="spanDnsClientRawResponsesCount"></span>)
+                                                        Developer responses (<span id="spanDnsClientRawResponsesCount"></span>)
                                                     </a>
                                                 </h4>
                                             </div>
@@ -985,31 +987,31 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                 <div id="settingsTabPaneGeneral" role="tabpanel" class="tab-pane active">
                                                     <div id="divSettingsGeneralLocalParameters" class="well well-sm form-horizontal">
                                                         <div class="form-group">
-                                                            <label for="txtDnsServerDomain" class="col-sm-3 control-label">DNS Server Domain</label>
+                                                            <label for="txtDnsServerDomain" class="col-sm-3 control-label">Server domain</label>
                                                             <div class="col-sm-6">
                                                                 <input type="text" class="form-control" id="txtDnsServerDomain" placeholder="domain name" maxlength="255">
                                                             </div>
-                                                            <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">The primary fully qualified domain name used by this DNS Server to identify itself.</div>
+                                                            <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">The fully qualified domain name that identifies this server.</div>
                                                         </div>
 
                                                         <div class="form-group">
-                                                            <label for="txtDnsServerLocalEndPoints" class="col-sm-3 control-label">DNS Server Local End Points</label>
+                                                            <label for="txtDnsServerLocalEndPoints" class="col-sm-3 control-label">DNS listening addresses</label>
                                                             <div class="col-sm-6">
                                                                 <textarea id="txtDnsServerLocalEndPoints" class="form-control" rows="3" spellcheck="false"></textarea>
                                                             </div>
-                                                            <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">Local End Points are the network interface IP addresses and ports you want the DNS Server to listen for requests. To explicitly bind the UDP sockets to interface device on Linux, specify the interface name as shown in these examples: <code>192.168.1.10%eth0:53</code> or <code>[2001:db8::1%eth1]:53</code>. For VRF, the interface name can be the VRF name.</div>
+                                                            <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">IP addresses and ports that receive DNS requests. To explicitly bind the UDP sockets to interface device on Linux, specify the interface name as shown in these examples: <code>192.168.1.10%eth0:53</code> or <code>[2001:db8::1%eth1]:53</code>. For VRF, the interface name can be the VRF name.</div>
                                                         </div>
 
                                                         <div class="form-group">
-                                                            <label for="txtDnsServerIPv4SourceAddresses" class="col-sm-3 control-label">DNS Server IPv4 Source Addresses</label>
+                                                            <label for="txtDnsServerIPv4SourceAddresses" class="col-sm-3 control-label">Outbound IPv4 addresses</label>
                                                             <div class="col-sm-6">
                                                                 <textarea id="txtDnsServerIPv4SourceAddresses" class="form-control" rows="3" spellcheck="false"></textarea>
                                                             </div>
-                                                            <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">The IPv4 source addresses that the DNS Server must use for making all outbound DNS requests when the server is connected to two or more networks. Network addresses are also accepted.</div>
+                                                            <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">Source addresses for outbound DNS requests on multihomed servers. Network prefixes are also accepted.</div>
                                                         </div>
 
                                                         <div class="form-group">
-                                                            <label for="txtDnsServerIPv6SourceAddresses" class="col-sm-3 control-label">DNS Server IPv6 Source Addresses</label>
+                                                            <label for="txtDnsServerIPv6SourceAddresses" class="col-sm-3 control-label">Outbound IPv6 addresses</label>
                                                             <div class="col-sm-6">
                                                                 <textarea id="txtDnsServerIPv6SourceAddresses" class="form-control" rows="3" spellcheck="false"></textarea>
                                                             </div>
@@ -1017,7 +1019,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                         </div>
 
                                                         <div>
-                                                            <p><b>Note!</b> The DNS Server local end point changes will be automatically applied and so you do not need to manually restart the main service.</p>
+                                                            <p><b>Note!</b> Listening address changes apply without a service restart.</p>
                                                             <p><b>Note!</b> The source adddresses configured above must be the IP addresses that are configured on the local system's network interface. When using source addresses option, its also necessary to ensure that the system has a default route or a specific route for the source address to be able to reach the destination network. When source addresses are not configured, the IP address of the interface with a default route will be used as the source address.</p>
                                                         </div>
                                                     </div>
@@ -1154,7 +1156,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                             </div>
                                                         </div>
 
-                                                        <div><b>Warning!</b> Enable IPv6 support only if this DNS Server has native IPv6 Internet access otherwise it will affect performance. There are many name servers on the Internet that do not respond over IPv6 and thus using Prefer IPv6 option when you are running DNS Server in recursive resolver mode (i.e. without any forwarders) may cause frequent operational issues with resolution that may result increase in Server Failure responses.</div>
+                                                        <div><b>Warning!</b> Prefer IPv6 requires working native IPv6 Internet access. Unreachable IPv6 name servers can slow resolution or cause failures, especially without forwarders.</div>
                                                     </div>
 
                                                     <div id="divSettingsGeneralUdpSocketPool" class="well well-sm form-horizontal">
@@ -1207,7 +1209,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
                                                         <div>
                                                             <p><b>Warning!</b> Devices that do not have a real-time clock and rely on NTP when booting (e.g. Raspberry Pi), enabling DNSSEC validation will cause failure to resolve the NTP server domain name thus causing the DNS Server to fail to validate all other domain names too due to invalid system date/time. To fix this issue, just create a Conditional Forwarder zone for the NTP server domain name (e.g. ntp.org) with forwarder set to <code>this-server</code> and Enable DNSSEC Validation option unchecked. This conditional forwarder zone will disable DNSSEC validation for the NTP server domain name and allow the device to update its system data/time on boot.</p>
-                                                            <p><b>Warning!</b> When forwarders are configured, DNSSEC validation will work only if the forwarders are security aware i.e. can respond to DNSSEC requests correctly.</p>
+                                                            <p><b>Warning!</b> DNSSEC validation requires forwarders that support DNSSEC responses.</p>
                                                             <p><b>Note!</b> Enabling DNSSEC may increase delays in resolving domain names when the cache is initially empty. As the cache fills up, the performance will be normal as expected.</p>
                                                         </div>
                                                     </div>
@@ -1260,7 +1262,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                         </div>
 
                                                         <div>
-                                                            <p><b>Warning!</b> EDNS Client Subnet (ECS) option when enabled will compromises user's privacy since the DNS Server will send the user's public IP network subnet to name servers or forwarders when resolving requests. When not using encrypted DNS protocols, this information can also be read passively by anyone on the network.</p>
+                                                            <p><b>Warning!</b> EDNS Client Subnet shares the client’s public network prefix with name servers or forwarders. Without encrypted DNS, others on the network can also read it.</p>
                                                             <p><b>Note!</b> EDNS Client Subnet (ECS) option allows passing the user's client subnet information to name servers or forwarders so that the response may contain IP addresses of servers closer to the user's geographic region. EDNS Client Subnet (ECS) option thus is only useful when the DNS Server is hosted in a geographically different region compared to the users that are configured to use it.</p>
                                                             <p><b>Note!</b> Enabling EDNS Client Subnet (ECS) option will significantly increase the DNS Server's memory usage since the server will have to cache data for each client subnet separately. It will also increase cache misses since DNS Server will have to resolve requests and cache them for each client subnet separately.</p>
                                                         </div>
@@ -1335,7 +1337,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                         </div>
                                                     </div>
 
-                                                    <div id="divSettingsGeneralAdvancedOptions" class="well well-sm form-horizontal">
+                                                    <div id="divSettingsGeneralAdvancedOptions" class="well well-sm form-horizontal ux-advanced" data-ux-title="Advanced transport settings">
                                                         <div class="form-group">
                                                             <label for="txtClientTimeout" class="col-sm-3 control-label">Client Timeout</label>
                                                             <div class="col-sm-7">
@@ -2443,7 +2445,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                             <div class="col-sm-offset-3 col-sm-8" style="padding-top: 5px;">Max number of days to keep the log files. Log files older than the specified number of days will be deleted automatically.</div>
                                                         </div>
 
-                                                        <div><b>Warning!</b> Enabling query logging will significantly increase the log file size and use up disk space.</div>
+                                                        <div><b>Warning!</b> Query logging increases disk usage. Set retention to fit available storage.</div>
                                                     </div>
 
                                                     <div class="well well-sm form-horizontal">
@@ -2491,17 +2493,21 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
                                 <div id="mainPanelTabPaneSecurity" role="tabpanel" class="tab-pane" style="padding: 15px 0;">
                                     <h3>DDI security</h3>
-                                    <p>DNS, DHCP, and IPAM share threat policies and device evidence. Behavioral scores are uncalibrated risk signals, not proof of data theft.</p>
-                                    <p id="securityRevision"></p><p id="securityHealth"></p>
+                                    <p>Shared protection and device evidence across DNS, DHCP and IPAM.</p>
+                                    <p id="securityRevision"></p><p id="securityHealth"></p><details><summary>Integration details</summary><p id="securityHealthDetails"></p></details>
                                     <button class="btn btn-default" onclick="refreshSecurity();">Refresh security</button>
+                                    <h4>Recent DNS and DHCP security events</h4>
+                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Time</th><th>Node</th><th>Service</th><th>Client</th><th>Query</th><th>Action</th><th>Behavioral score</th><th>Device</th><th>Reason</th><th>Evidence</th></tr></thead><tbody id="securityEventsBody"></tbody></table></div>
+                                    <div id="securityEvidence"></div>
+
                                     <div class="security-edit">
-                                        <h4>Protection settings</h4>
+                                        <details><summary>Protection settings</summary>
                                         <form onsubmit="saveSecuritySettings(); return false;">
                                             <p><label><input id="securityEnabled" type="checkbox" /> Enable security module</label> <label><input id="securityAuthoritative" type="checkbox" /> Inspect locally authoritative answers</label></p>
                                             <div class="row">
                                                 <div class="col-sm-4"><label for="securityMode">Enforcement</label><select id="securityMode" class="form-control"><option>Monitor</option><option>Block</option></select></div>
                                                 <div class="col-sm-4"><label for="securityAlertThreshold">Behavioral alert threshold</label><input id="securityAlertThreshold" class="form-control" type="number" min="1" max="100" /></div>
-                                                <div class="col-sm-4"><label for="securityDeviceThreshold">Shared device response threshold</label><input id="securityDeviceThreshold" class="form-control" type="number" min="1" max="100" /></div>
+                                                <div class="col-sm-4"><label for="securityDeviceThreshold">Device response threshold</label><input id="securityDeviceThreshold" class="form-control" type="number" min="1" max="100" /></div>
                                             </div>
                                             <div class="row">
                                                 <div class="col-sm-6"><label for="securityDeviceDns">DNS response to device signals</label><select id="securityDeviceDns" class="form-control"><option>Monitor</option><option>Block</option></select></div>
@@ -2512,16 +2518,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             <p><label><input id="securityMispEnabled" type="checkbox" /> Enable background MISP enrichment</label></p>
                                             <div class="row">
                                                 <div class="col-sm-6"><label for="securityMispUrl">MISP HTTPS URL</label><input id="securityMispUrl" class="form-control" placeholder="https://misp.example/" /></div>
-                                                <div class="col-sm-6"><label for="securityMispCredential">API key environment variable</label><input id="securityMispCredential" class="form-control" placeholder="DDI_MISP_API_KEY" /></div>
+                                                <div class="col-sm-6"><label for="securityMispCredential">Server credential reference</label><input id="securityMispCredential" class="form-control" placeholder="DDI_MISP_API_KEY" /></div>
                                             </div>
                                             <div class="row">
-                                                <div class="col-sm-6"><label for="securityMispRefresh">Refresh interval in seconds</label><input id="securityMispRefresh" class="form-control" type="number" min="60" max="86400" /></div>
-                                                <div class="col-sm-6"><label for="securityMispLifetime">Cached evidence lifetime in hours</label><input id="securityMispLifetime" class="form-control" type="number" min="1" max="168" /></div>
+                                                <div class="col-sm-6"><label for="securityMispRefresh">Refresh interval (seconds)</label><input id="securityMispRefresh" class="form-control" type="number" min="60" max="86400" /></div>
+                                                <div class="col-sm-6"><label for="securityMispLifetime">Evidence lifetime (hours)</label><input id="securityMispLifetime" class="form-control" type="number" min="1" max="168" /></div>
                                             </div>
                                             <p>MISP supplies monitor evidence. Its API key remains on the server and is not saved in the policy.</p>
                                             <button class="btn btn-primary" type="submit">Save settings</button>
                                         </form>
-                                        <h4>Add threat indicators or exceptions</h4>
+                                        </details><details><summary>Add indicators or exceptions</summary>
                                         <form onsubmit="addSecurityIndicators(); return false;">
                                             <div class="row">
                                                 <div class="col-sm-4"><label for="securityIndicatorKind">Indicator type</label><select id="securityIndicatorKind" class="form-control"><option value="Domain">Exact domain</option><option value="DomainSuffix">Domain and subdomains</option><option value="Network">IP address or network</option><option value="Url">URL evidence only</option></select></div>
@@ -2530,17 +2536,17 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
                                             <div class="row">
                                                 <div class="col-sm-4"><label for="securityIndicatorConfidence">Source confidence</label><input id="securityIndicatorConfidence" class="form-control" type="number" min="0" max="100" value="80" /></div>
-                                                <div class="col-sm-4"><label for="securityIndicatorClient">Client network scope</label><input id="securityIndicatorClient" class="form-control" placeholder="All clients, or 192.0.2.0/24" /></div>
+                                                <div class="col-sm-4"><label for="securityIndicatorClient">Client network</label><input id="securityIndicatorClient" class="form-control" placeholder="All clients, or 192.0.2.0/24" /></div>
                                                 <div class="col-sm-4"><label for="securityIndicatorExpiry">Expiry</label><input id="securityIndicatorExpiry" class="form-control" type="datetime-local" /></div>
                                             </div>
                                             <label for="securityIndicatorValues">One value per line</label><textarea id="securityIndicatorValues" class="form-control" rows="4" required></textarea>
                                             <p>URL paths are retained as evidence and do not block a hostname. Query-name exceptions affect this module; existing DNS blocking rules still apply.</p>
                                             <button class="btn btn-primary" type="submit">Add indicators</button>
-                                        </form>
+                                        </form></details>
                                     </div>
-                                    <h4>Local policy indicators</h4>
+                                    <h4>Threat indicators</h4>
                                     <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Type</th><th>Value</th><th>Action</th><th>Source</th><th>Confidence</th><th>Clients</th><th>Expiry</th><th>Actions</th></tr></thead><tbody id="securityIndicatorsBody"></tbody></table></div>
-                                    <h4>Policy simulation</h4>
+                                    <details><summary>Test policy</summary>
                                     <form onsubmit="simulateSecurity(); return false;">
                                         <div class="row">
                                             <div class="col-sm-3"><label for="securitySimQuery">Query name</label><input id="securitySimQuery" class="form-control" required /></div>
@@ -2548,42 +2554,40 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             <div class="col-sm-3"><label for="securitySimCnames">CNAME targets</label><input id="securitySimCnames" class="form-control" placeholder="Comma separated" /></div>
                                             <div class="col-sm-3"><label for="securitySimAddresses">Resolved IPs</label><input id="securitySimAddresses" class="form-control" placeholder="Comma separated" /></div>
                                         </div><br /><button class="btn btn-default" type="submit">Simulate</button>
-                                    </form><div id="securitySimulation" class="well" style="margin-top: 10px;"></div>
-                                    <h4>Recent DNS and DHCP security events</h4>
-                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Time</th><th>Node</th><th>Service</th><th>Client</th><th>Query</th><th>Action</th><th>Behavioral score</th><th>Device</th><th>Reason</th><th>Evidence</th></tr></thead><tbody id="securityEventsBody"></tbody></table></div>
-                                    <pre id="securityEvidence"></pre>
-                                    <h4>Shared device signals</h4>
+                                    </form><div id="securitySimulation" role="status" aria-live="polite" style="margin-top: 10px;"></div></details>
+                                    <details><summary>Device signals</summary>
                                     <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Source node</th><th>Source service</th><th>DHCP scope</th><th>Hardware address</th><th>Risk priority</th><th>Expiry</th><th>Reason</th></tr></thead><tbody id="securitySignalsBody"></tbody></table></div>
-                                    <h4>Investigations</h4>
+                                    </details><details><summary>Investigations</summary>
                                     <form class="form-inline" onsubmit="securitySearchTimeline(); return false;">
-                                        <label>From UTC <input id="securitySearchFrom" class="form-control" placeholder="2026-10-12T12:00:00Z" /></label>
-                                        <label>To UTC <input id="securitySearchTo" class="form-control" placeholder="2026-10-12T13:00:00Z" /></label>
-                                        <label>Client or hardware identifier <input id="securitySearchClient" class="form-control" /></label>
+                                        <label>From (UTC) <input id="securitySearchFrom" class="form-control" placeholder="2026-10-12T12:00:00Z" /></label>
+                                        <label>To (UTC) <input id="securitySearchTo" class="form-control" placeholder="2026-10-12T13:00:00Z" /></label>
+                                        <label>Client IP or MAC <input id="securitySearchClient" class="form-control" /></label>
                                         <label>Domain contains <input id="securitySearchQuery" class="form-control" /></label>
                                         <button class="btn btn-default" type="submit">Search timeline</button>
                                     </form>
-                                    <div id="securityTimeline"></div><button class="btn btn-default" onclick="securityExportTimeline();">Export search JSON</button>
+                                    <div id="securityTimeline" role="status" aria-live="polite"></div><button id="securityExportTimeline" class="btn btn-default" onclick="securityExportTimeline();" disabled>Export results</button>
                                     <form class="security-edit form-inline" onsubmit="securitySetDisposition(); return false;">
-                                        <label>Event ID <input id="securityDispositionId" class="form-control" required /></label>
-                                        <label>Status <select id="securityDispositionStatus" class="form-control"><option>Investigating</option><option>Confirmed</option><option>FalsePositive</option><option>Resolved</option></select></label>
+                                        <label>Event <select id="securityDispositionEvent" class="form-control" onchange="securitySelectEvent();"><option value="">Search for an event</option><option value="manual">Enter an event reference</option></select></label>
+                                        <label id="securityManualReference" style="display:none;">Event reference <input id="securityDispositionId" class="form-control" /></label>
+                                        <label>Status <select id="securityDispositionStatus" class="form-control"><option>Investigating</option><option>Confirmed</option><option value="FalsePositive">False positive</option><option>Resolved</option></select></label>
                                         <label>Notes <input id="securityDispositionNotes" class="form-control" maxlength="2048" /></label>
-                                        <button class="btn btn-primary" type="submit">Record analyst disposition</button>
-                                    </form><ul id="securityDispositions"></ul>
+                                        <button class="btn btn-primary" type="submit">Save review</button>
+                                    </form><ul id="securityDispositions"></ul></details>
                                     <div class="security-edit">
-                                        <h4>Policy history and rollback</h4><button class="btn btn-default" onclick="securityLoadHistory();">Load retained revisions</button><ul id="securityPolicyHistory"></ul>
+                                        <details><summary>Policy history</summary><button class="btn btn-default" onclick="securityLoadHistory();">Load history</button><ul id="securityPolicyHistory"></ul>
                                         <form class="form-inline" onsubmit="securityRollback(); return false;">
-                                            <label>Target revision <input id="securityRollbackRevision" class="form-control" type="number" min="0" required /></label>
-                                            <button class="btn btn-primary" type="submit">Publish previous content as a new revision</button>
+                                            <label>Previous revision <input id="securityRollbackRevision" class="form-control" type="number" min="0" required /></label>
+                                            <button class="btn btn-primary" type="submit">Restore policy</button>
                                         </form>
-                                    </div>
+                                    </details></div>
                                 </div>
                                 <div id="mainPanelTabPaneIpam" role="tabpanel" class="tab-pane" style="padding: 15px 0;">
                                     <h3>IP address management</h3>
                                     <p>Manage intended address assignments and compare them with linked DNS zones and DHCP scopes.</p>
                                     <p id="ipamRevision"></p>
                                     <button class="btn btn-default" onclick="refreshIpam();">Refresh inventory</button>
-                                    <div class="ipam-edit">
-                                        <h4>New network view</h4>
+                                    <details id="ipamNetworkEditor" class="ipam-edit"><summary>Add or edit networks</summary>
+                                        <h4>Network view</h4>
                                         <form class="form-inline" onsubmit="ipamSave('view'); return false;">
                                             <label>Name <input id="ipamViewName" class="form-control" required maxlength="255" /></label>
                                             <label>Description <input id="ipamViewDescription" class="form-control" /></label>
@@ -2605,14 +2609,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div>
                                             <p><label><input id="ipamContainer" type="checkbox" /> Container for child prefixes</label></p>
                                             <button class="btn btn-primary" type="submit">Save subnet</button>
-                                            <button class="btn btn-default" type="button" onclick="$('#ipamSubnetId').val('');">Save next as new</button>
+                                            <button class="btn btn-default" type="button" onclick="ipamNew('subnet');">New subnet</button>
                                         </form>
-                                    </div>
+                                    </details>
                                     <h4>Network inventory</h4>
                                     <div class="table-responsive"><table class="table table-striped"><thead><tr><th>View</th><th>Name</th><th>Prefix</th><th>Type</th><th>Site</th><th>VLAN</th><th>DHCP scope</th><th>DNS zone</th><th>Actions</th></tr></thead><tbody id="ipamSubnetsBody"></tbody></table></div>
-                                    <div class="ipam-edit">
-                                        <h4>Address assignment</h4>
-                                        <p>Assignments record intent. They do not automatically create DNS records or DHCP reservations. Suggested addresses reflect current inventory and linked observations.</p>
+                                    <details id="ipamAssignmentEditor" class="ipam-edit"><summary>Add or edit assignments</summary>
+                                        <p>Assignments update inventory. Create DNS records and DHCP reservations separately.</p>
                                         <form onsubmit="ipamSave('assignment'); return false;">
                                             <input type="hidden" id="ipamAssignmentId" />
                                             <div class="row">
@@ -2627,32 +2630,31 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                             </div><br />
                                             <button class="btn btn-default" type="button" onclick="ipamNextAvailable();">Suggest available address</button>
                                             <button class="btn btn-primary" type="submit">Save assignment</button>
-                                            <button class="btn btn-default" type="button" onclick="$('#ipamAssignmentId').val('');">Save next as new</button>
+                                            <button class="btn btn-default" type="button" onclick="ipamNew('assignment');">New assignment</button>
                                         </form>
-                                    </div>
+                                    </details>
                                     <h4>Assignments</h4>
                                     <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Subnet</th><th>Address</th><th>Hostname</th><th>Owner</th><th>Status</th><th>Description</th><th>Actions</th></tr></thead><tbody id="ipamAssignmentsBody"></tbody></table></div>
                                     <h4>Reconciliation and utilization</h4>
                                     <div class="form-inline"><label for="ipamInspectSubnet">Subnet</label> <select id="ipamInspectSubnet" class="form-control"></select> <button class="btn btn-default" onclick="inspectIpam();">Inspect linked services</button></div>
                                     <div id="ipamInspection" style="margin-top: 15px;"></div>
-                                    <h4>Recent changes</h4><ul id="ipamHistory"></ul>
-                                    <div id="ddiNetBoxPanel" style="display:none; margin-top:20px;">
-                                        <h4>NetBox publication</h4>
+                                    <details><summary>Recent changes</summary><ul id="ipamHistory"></ul></details>
+                                    <details id="ddiNetBoxPanel" style="display:none; margin-top:20px;"><summary>NetBox integration</summary>
                                         <p>DDI owns mapped prefixes and addresses. Unowned NetBox objects are reported as conflicts. Review a preview before publication.</p>
                                         <button class="btn btn-default" onclick="ddiLoadNetBox();">Load settings</button>
                                         <form onsubmit="ddiSaveNetBox(); return false;">
                                             <label><input id="ddiNetBoxEnabled" type="checkbox" /> Enable NetBox publication</label>
                                             <label for="ddiNetBoxUrl">NetBox HTTPS URL</label><input id="ddiNetBoxUrl" class="form-control" type="url" placeholder="https://netbox.example/" />
-                                            <label for="ddiNetBoxCredential">API key environment variable</label><input id="ddiNetBoxCredential" class="form-control" value="DDI_NETBOX_API_KEY" />
+                                            <label for="ddiNetBoxCredential">Server credential reference</label><input id="ddiNetBoxCredential" class="form-control" value="DDI_NETBOX_API_KEY" />
                                             <label for="ddiNetBoxScheme">Token type</label><select id="ddiNetBoxScheme" class="form-control"><option value="Bearer">Bearer (v2)</option><option value="Token">Token (legacy v1)</option></select>
                                             <p>The key remains on the server. Select the network views to publish and their existing NetBox VRFs; leave the VRF blank for the global table.</p>
-                                            <div class="table-responsive"><table class="table"><thead><tr><th>Publish</th><th>Network view</th><th>NetBox VRF ID</th></tr></thead><tbody id="ddiNetBoxMappings"></tbody></table></div>
+                                            <div class="table-responsive"><table class="table"><thead><tr><th>Publish</th><th>Network view</th><th>NetBox VRF</th></tr></thead><tbody id="ddiNetBoxMappings"></tbody></table></div>
                                             <button id="ddiNetBoxSave" class="btn btn-primary" type="submit" disabled>Save settings</button>
                                         </form>
-                                        <button class="btn btn-default" onclick="ddiPreviewNetBox();">Preview publication</button>
+                                        <button class="btn btn-default" onclick="ddiPreviewNetBox();">Preview changes</button>
                                         <div id="ddiNetBoxPreview"></div>
-                                        <button id="ddiNetBoxApply" class="btn btn-primary" onclick="ddiApplyNetBox();" disabled>Publish reviewed changes</button>
-                                    </div>
+                                        <button id="ddiNetBoxApply" class="btn btn-primary" onclick="ddiApplyNetBox();" disabled>Publish changes</button>
+                                    </details>
                                 </div>
                                 <div id="mainPanelTabPaneDhcp" role="tabpanel" class="tab-pane" style="padding: 10px 0 0 0;">
                                     <details class="ddi-shared-dhcp" style="margin-bottom:15px;"><summary onclick="ddiRefreshDhcp();">Shared DHCP</summary>
@@ -3361,8 +3363,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                         <p><b>Note!</b> The Web Service will be automatically restarted to apply these changes thus there is no need to restart the DNS Server manually.</p>
                                                         <p><b>Note!</b> When using a reverse proxy with the Web Service, you need to add <code>X-Forwarded-Proto</code> and <code>X-Forwarded-Host</code> headers to proxy request to allow the Web Service to correctly form the SSO Redirect URI. If the reverse proxy is setup to use a path prefix then make sure to add the <code>X-Forwarded-Prefix</code> header to proxy request too. These headers will be read only if the reverse proxy IP address is configured to be allowed in the <b>Reverse Proxy Addresses</b> option in Settings > Web Service section. For example, if you are using nginx as the reverse proxy with a path prefix of <code>/dns</code>, then you should add the following headers: <code>proxy_set_header X-Forwarded-Proto $scheme;</code>, <code>proxy_set_header X-Forwarded-Host $host;</code>, <code>proxy_set_header X-Forwarded-Prefix /dns;</code>, and <code>proxy_redirect / /dns/;</code></p>
                                                         <p><b>Note!</b> Domain names in all of the URLs configured above will be resolved by the DNS Server internally only. Thus, make sure that the DNS Server is able to resolve the domain name in the URL. Adding <code>hosts</code> file entries in the host OS will not work.</p>
-                                                        <p><b>Warning!</b> All URLs configured above must use <code>https</code> URL scheme for production environments. Using <code>http</code> URL scheme is not secure and should be used only for testing purposes.</p>
-                                                        <p><b>Warning!</b> Any DNS related failure may cause Single Sign-On (SSO) to fail to work making it impossible for SSO users to log in to fix the DNS issue due to circular dependency. Thus, it is recommended to maintain a local administrator user account for such scenarios.</p>
+                                                        <p><b>Warning!</b> Use HTTPS URLs to protect authentication traffic. HTTP is suitable only for isolated testing.</p>
+                                                        <p><b>Warning!</b> Keep a local administrator account available. DNS failures can prevent SSO users from signing in to repair the server.</p>
                                                     </div>
                                                 </div>
 
@@ -3526,8 +3528,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                         <p><b>Note!</b> When Group Map is configured, the LDAP user's group membership cannot be managed locally and any group membership changes must be configured at the directory service itself. LDAP users need to relogin so that any group membership changes made at the directory service are applied to their user accounts. The Group Map thus allows managing user access centrally via the directory service. Keep the Group Map empty if group membership management for LDAP users is required to be managed via the DNS Server itself.</p>
                                                         <p><b>Note!</b> On Windows, the domain name used for LDAP Server above will be resolved by the DNS Server internally only. Thus, make sure that the DNS Server is able to resolve the configured domain name. Adding hosts file entries in the host OS will not work.</p>
                                                         <p><b>Note!</b> On Linux, the domain name used for LDAP Server above will be resolved using the system's DNS server. Thus, make sure that <code>/etc/resolv.conf</code> is configured with <code>127.0.0.1</code> loopback address to ensure that the resolution is done using this DNS Server.</p>
-                                                        <p><b>Warning!</b> The Ignore SSL Certificate Errors option is not secure and should be used only for testing purposes.</p>
-                                                        <p><b>Warning!</b> Any DNS related failure may cause LDAP authentication to fail to work making it impossible for LDAP users to log in to fix the DNS issue due to circular dependency. Thus, it is recommended to maintain a local administrator user account for such scenarios.</p>
+                                                        <p><b>Warning!</b> Ignoring certificate errors disables server identity verification. Use this only for isolated testing.</p>
+                                                        <p><b>Warning!</b> Keep a local administrator account available. DNS failures can prevent LDAP users from signing in to repair the server.</p>
                                                     </div>
                                                 </div>
 
@@ -4087,7 +4089,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                         </div>
 
                         <div id="divChangePassword2FATOTP" class="form-group">
-                            <label for="txtChangePassword2FATOTP" class="col-sm-4 control-label">Enter OTP</label>
+                            <label for="txtChangePassword2FATOTP" class="col-sm-4 control-label">Verification code</label>
                             <div class="col-sm-7">
                                 <input id="txtChangePassword2FATOTP" type="text" class="form-control" style="width: 100px;" placeholder="OTP" maxlength="6" autocomplete="off">
                                 <div style="padding-top: 5px;">Enter the 6-digit code you see in your authenticator app.</div>
@@ -4146,7 +4148,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                 </div>
 
                                 <div class="form-group">
-                                    <label for="txtConfigure2FATOTP" class="col-sm-3 control-label">Enter OTP</label>
+                                    <label for="txtConfigure2FATOTP" class="col-sm-3 control-label">Verification code</label>
                                     <div class="col-sm-8">
                                         <input id="txtConfigure2FATOTP" type="text" class="form-control" style="width: 100px;" placeholder="OTP" maxlength="6" autocomplete="off">
                                         <div style="padding-top: 5px;">Enter the 6-digit code you see in your authenticator app.</div>
@@ -4245,7 +4247,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             <div class="modal-content">
                 <div class="modal-header">
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    <h4 class="modal-title" id="lblUpdateAvailableTitle">New Update Available</h4>
+                    <h4 class="modal-title" id="lblUpdateAvailableTitle">Update available</h4>
                 </div>
                 <div class="modal-body">
                     <div style="margin-bottom: 20px;">
@@ -6647,16 +6649,16 @@ MII...
             <div class="modal-content">
                 <div class="modal-header">
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-                    <h4 class="modal-title">App Config - <span id="lblAppConfigName"></span></h4>
+                    <h4 class="modal-title">Application settings - <span id="lblAppConfigName"></span></h4>
                 </div>
                 <div class="modal-body">
                     <div id="divAppConfigAlert"></div>
 
-                    <p>Edit the <code>dnsApp.config</code> config file below as required by the DNS application.</p>
+                    <p>This application provides a developer configuration file.</p>
 
                     <div class="form-group">
-                        <label for="txtAppConfig" class="control-label">Config File</label>
-                        <textarea id="txtAppConfig" class="form-control" rows="15" spellcheck="false"></textarea>
+                        <label for="txtAppConfig" class="control-label">Configuration file</label>
+                        <details><summary>Developer configuration</summary><textarea id="txtAppConfig" class="form-control" rows="15" spellcheck="false"></textarea></details>
                     </div>
 
                     <p>Note: The app will reload the config automatically after you save it.</p>
@@ -7345,11 +7347,11 @@ MII...
                             </div>
 
                             <p>
-                                <b>Note!</b> When the Cluster is initialized, the DNS Server Domain Name will be changed such that the current hostname is a subdomain name of the Cluster Domain name specified above. For example, if the current DNS Server Domain Name is <code>ns1.mydomain.tld</code> or just <code>ns1</code> then the new domain name will be <code>ns1.mycluster.tld</code>.
+                                <b>Note!</b> When the Cluster is initialized, the Server domain Name will be changed such that the current hostname is a subdomain name of the Cluster Domain name specified above. For example, if the current Server domain Name is <code>ns1.mydomain.tld</code> or just <code>ns1</code> then the new domain name will be <code>ns1.mycluster.tld</code>.
                             </p>
 
                             <p>
-                                <b>Note!</b> If the Web Service does not have HTTPS enabled, then the initialization process will enable it automatically with a self-signed certificate. However, it is recommended to manually configure HTTPS with a valid certificate before initializing the Cluster. This certificate must include the new expected DNS Server Domain Name, as mentioned in the above note, as the Subject Common Name or Subject Alternative Name (SAN) so that it validates when a Secondary node tries to join the Cluster. Once a node joins the Cluster, it uses DANE-EE for server authentication and the domain name in the certificate is no longer required to match the DNS Server Domain Name.
+                                <b>Note!</b> If the Web Service does not have HTTPS enabled, then the initialization process will enable it automatically with a self-signed certificate. However, it is recommended to manually configure HTTPS with a valid certificate before initializing the Cluster. This certificate must include the new expected Server domain Name, as mentioned in the above note, as the Subject Common Name or Subject Alternative Name (SAN) so that it validates when a Secondary node tries to join the Cluster. Once a node joins the Cluster, it uses DANE-EE for server authentication and the domain name in the certificate is no longer required to match the Server domain Name.
                             </p>
 
                             <p>
@@ -7357,7 +7359,7 @@ MII...
                             </p>
 
                             <p>
-                                <b>Warning!</b> The Cluster Domain name cannot be changed later. Make sure that you enter the correct domain name before proceeding. You can update the DNS Server Domain Name later if needed from Settings but it must always be a subdomain name of the Cluster Domain name.
+                                <b>Warning!</b> The Cluster Domain name cannot be changed later. Make sure that you enter the correct domain name before proceeding. You can update the Server domain Name later if needed from Settings but it must always be a subdomain name of the Cluster Domain name.
                             </p>
                         </div>
                     </div>
@@ -7475,7 +7477,7 @@ MII...
                             </p>
 
                             <p>
-                                <b>Note!</b> If the Web Service does not have HTTPS enabled, then the joining process will enable it automatically with a self-signed certificate. However, its recommended to manually configure HTTPS with a valid certificate before joining the cluster. This certificate should optionally include the new expected DNS Server Domain Name, which will be a subdomain name of the Cluster Domain name, as the Subject Common Name or Subject Alternative Name (SAN).
+                                <b>Note!</b> If the Web Service does not have HTTPS enabled, then the joining process will enable it automatically with a self-signed certificate. However, its recommended to manually configure HTTPS with a valid certificate before joining the cluster. This certificate should optionally include the new expected Server domain Name, which will be a subdomain name of the Cluster Domain name, as the Subject Common Name or Subject Alternative Name (SAN).
                             </p>
 
                             <p>

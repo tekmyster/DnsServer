@@ -1,28 +1,30 @@
 var ddiSecurityPolicy = null;
 
-function securityRequest(path, method, data, success) {
+function securityRequest(path, method, data, success, error) {
     HTTPRequest({ url: '/api/security/' + path, method: method, data: data || {}, token: sessionData.token,
-        success: success, invalidToken: showPageLogin });
+        success: success, error: error, invalidToken: showPageLogin });
 }
 
 function refreshSecurity() {
+    $('#securityRevision').text('Loading security policy…');
     securityRequest('policy/get', 'GET', {}, function (response) {
         var data = response.response;
         ddiSecurityPolicy = data.policy;
         var p = ddiSecurityPolicy;
         $('.security-edit').toggle(sessionData.info.permissions.Settings.canModify);
-        $('#securityRevision').text('Policy revision ' + p.revision + ' · ' + (p.enabled ? p.mode : 'Disabled'));
+        $('#securityRevision').text(p.enabled ? (p.mode === 'Block' ? 'Protection enabled' : 'Monitoring enabled') : 'Protection disabled');
         $('#securityEnabled').prop('checked', p.enabled); $('#securityMode').val(p.mode);
         $('#securityAuthoritative').prop('checked', p.inspectAuthoritative); $('#securityAlertThreshold').val(p.alertThreshold);
         $('#securityDeviceThreshold').val(p.deviceThreshold); $('#securityDeviceDns').val(p.deviceDnsResponse); $('#securityDhcpResponse').val(p.dhcpResponse);
         $('#securityMispEnabled').prop('checked', p.misp.enabled); $('#securityMispUrl').val(p.misp.url);
         $('#securityMispCredential').val(p.misp.apiKeyEnvironment); $('#securityMispRefresh').val(p.misp.refreshSeconds); $('#securityMispLifetime').val(p.misp.cacheLifetimeHours);
         $('#securityMispEnabled, #securityMispUrl, #securityMispCredential, #securityMispRefresh, #securityMispLifetime').prop('disabled', !sessionData.info.permissions.Administration.canModify);
-        $('#securityHealth').text('MISP: ' + data.mispHealth.status + ' (' + data.mispHealth.indicators + ' cached indicators). Signal distribution: ' + data.signalHealth.status + '. Dropped event deliveries: ' + data.droppedEvents + '.');
+        $('#securityHealth').text('MISP: ' + (!p.misp.enabled ? 'Disabled' : data.mispHealth.lastSuccess ? 'Last updated ' + productTime(data.mispHealth.lastSuccess) : 'Awaiting first update') + ' · Shared signals: ' + (data.signalHealth.status.indexOf('failed') >= 0 ? 'Sync interrupted' : data.signalHealth.lastSuccess ? 'Last delivery completed' : 'Local evidence available'));
+        $('#securityHealthDetails').text('Policy revision: ' + p.revision + ' · Cached indicators: ' + data.mispHealth.indicators + ' · Dropped event deliveries: ' + data.droppedEvents + ' · MISP status: ' + data.mispHealth.status + ' · Signal status: ' + data.signalHealth.status);
         var body = $('#securityIndicatorsBody').empty();
         p.indicators.forEach(function (indicator) {
             var row = $('<tr>');
-            [indicator.kind, indicator.value, indicator.action, indicator.source, indicator.confidence, indicator.clientNetwork || 'All clients', indicator.expires || 'No expiry'].forEach(function (v) { row.append($('<td>').text(v)); });
+            [productLabel(indicator.kind), indicator.value, indicator.action, indicator.source, indicator.confidence, indicator.clientNetwork || 'All clients', indicator.expires ? productTime(indicator.expires) : 'No expiry'].forEach(function (v) { row.append($('<td>').text(v)); });
             var actions = $('<td>');
             if (sessionData.info.permissions.Settings.canModify) actions.append($('<button class="btn btn-xs btn-default">').text('Remove').on('click', function () {
                 var next = Object.assign({}, ddiSecurityPolicy, { indicators: ddiSecurityPolicy.indicators.filter(function (i) { return i.id !== indicator.id; }) });
@@ -30,8 +32,9 @@ function refreshSecurity() {
             }));
             row.append(actions); body.append(row);
         });
+        productEmptyRow(body, 8, 'No local indicators. Add a domain or address to monitor or block.');
         refreshSecurityEvents();
-    });
+    }, function () { $('#securityRevision').text('Policy unavailable. Refresh to try again.'); });
 }
 
 function submitSecurityPolicy(policy) {
@@ -67,19 +70,39 @@ function refreshSecurityEvents() {
         var events = $('#securityEventsBody').empty();
         response.response.events.slice().reverse().forEach(function (event) {
             var row = $('<tr>');
-            [event.timestamp, event.node, event.service, event.clientAddress || (event.device ? event.device.hardwareAddress : ''), event.query, event.action,
-                event.behavior ? event.behavior.score + ' / 100' : '', event.device ? event.device.scope + ' / ' + (event.device.hostName || 'Unknown hostname') : 'Attribution unavailable', event.reason].forEach(function (v) { row.append($('<td>').text(v)); });
+            [productTime(event.timestamp), event.node, event.service, event.clientAddress || (event.device ? event.device.hardwareAddress : ''), event.query, productLabel(event.action),
+                event.behavior ? event.behavior.score + ' / 100' : '', event.device ? event.device.scope + ' / ' + (event.device.hostName || 'Unknown hostname') : 'Attribution unavailable', productReason(event.reason)].forEach(function (v, index) { row.append(index === 8 ? $('<td>').append($('<span>').addClass('ux-summary-text').text(v)) : $('<td>').text(v)); });
             var evidence = $('<td>');
-            evidence.append($('<button class="btn btn-xs btn-default">').text('Evidence').on('click', function () { $('#securityEvidence').text(JSON.stringify(event, null, 2)); }));
+            evidence.append($('<button class="btn btn-xs btn-default">').text('View evidence').on('click', function () { securityShowEvidence(event); }));
             row.append(evidence); events.append(row);
         });
+        productEmptyRow(events, 10, 'No recent security events.');
         var signals = $('#securitySignalsBody').empty();
         response.response.signals.forEach(function (signal) {
             var row = $('<tr>');
             [signal.node, signal.service, signal.scope, signal.hardwareAddress, signal.score, signal.expires, signal.reason].forEach(function (v) { row.append($('<td>').text(v)); });
             signals.append(row);
         });
+        productEmptyRow(signals, 7, 'No active device signals.');
     });
+}
+function securityShowEvidence(event) {
+    var output = $('#securityEvidence').empty();
+    output.append($('<h4>').text('Event evidence'));
+    productDetails(output, [['Time', productTime(event.timestamp)], ['Server', event.node], ['Service', event.service], ['Client', event.clientAddress || event.device && event.device.hardwareAddress], ['Domain', event.query], ['Query type', event.queryType], ['Response', event.responseCode], ['Action', productLabel(event.action)], ['Reason', productReason(event.reason)]]);
+    if (event.device) productDetails(output, [['DHCP scope', event.device.scope], ['Hostname', event.device.hostName], ['Hardware address', event.device.hardwareAddress], ['Site', event.device.site], ['VLAN', event.device.vlan]]);
+    if (event.matches && event.matches.length) {
+        var matches = $('<ul>'); event.matches.forEach(function (match) { matches.append($('<li>').text(productLabel(match.kind) + ': ' + match.value + ' · ' + match.source + ' · Confidence ' + match.confidence)); });
+        output.append($('<h5>').text('Matched indicators')).append(matches);
+    }
+    if (event.behavior) {
+        output.append($('<h5>').text('Behavior score: ' + event.behavior.score + ' / 100'));
+        var contributions = $('<ul>'); event.behavior.contributions.forEach(function (c) { contributions.append($('<li>').text(c.points + ' points · ' + c.evidence)); }); output.append(contributions);
+        output.append($('<p>').addClass('text-muted').text('Heuristic score; detection accuracy has not been calibrated.'));
+    }
+    if (event.additionalMatches) output.append($('<p>').text(event.additionalMatches + ' additional indicator matches.'));
+    output.append($('<details>').append($('<summary>').text('Developer data')).append($('<pre>').text(JSON.stringify(event, null, 2))));
+    output.attr('tabindex', '-1').trigger('focus');
 }
 
 function simulateSecurity() {
@@ -98,8 +121,21 @@ function securitySearchTimeline() {
     var now = new Date(), from = $('#securitySearchFrom').val() || new Date(now.getTime() - 3600000).toISOString(), to = $('#securitySearchTo').val() || now.toISOString();
     securityRequest('events/search', 'GET', { from: from, to: to, client: $('#securitySearchClient').val(), query: $('#securitySearchQuery').val(), limit: 200 }, function (response) {
         securityTimelineResult = response.response.search; var output = $('#securityTimeline').empty(), list = $('<ul>');
-        output.append($('<p>').text(securityTimelineResult.events.length + ' events; ' + securityTimelineResult.scanned + ' persisted lines scanned; ' + securityTimelineResult.corruptLines + ' unreadable lines; ' + (securityTimelineResult.truncated ? 'partial coverage — narrow the search interval.' : 'search bounds were not reached.')));
-        securityTimelineResult.events.forEach(function (e) { list.append($('<li>').text(e.timestamp + ' — ' + e.service + ' — ' + e.action + ' — ' + (e.query || e.clientAddress || '') + ' — ID ' + e.id + ' — ' + e.reason)); }); output.append(list);
+        output.append($('<p>').text(securityTimelineResult.events.length ? securityTimelineResult.events.length + ' events found.' : 'No events match this search.'));
+        if (securityTimelineResult.truncated || securityTimelineResult.corruptLines) output.append($('<p>').addClass('text-warning').text('Some events could not be included. Narrow the time range to improve coverage.'));
+        output.append($('<details>').append($('<summary>').text('Search details')).append($('<p>').text(securityTimelineResult.scanned + ' records scanned · ' + securityTimelineResult.corruptLines + ' unreadable records')));
+        var previousChoice = $('#securityDispositionEvent').val(), previousReference = $('#securityDispositionId').val();
+        var choices = $('#securityDispositionEvent').empty().append($('<option>').val('').text('Select an event'));
+        securityTimelineResult.events.forEach(function (e) {
+            var label = productTime(e.timestamp) + ' · ' + (e.query || e.clientAddress || e.service) + ' · ' + productLabel(e.action);
+            choices.append($('<option>').val(e.id).text(label));
+            var item = $('<li>').text(label + ' · ' + productReason(e.reason) + ' ');
+            item.append($('<button>').attr('type', 'button').addClass('btn btn-xs btn-default').text('Review event').on('click', function () { choices.val(e.id); securitySelectEvent(); $('#securityDispositionStatus').trigger('focus'); securityShowEvidence(e); })); list.append(item);
+        }); choices.append($('<option>').val('manual').text('Enter an event reference'));
+        if (previousChoice === 'manual') { choices.val('manual'); $('#securityDispositionId').val(previousReference); $('#securityManualReference').show(); }
+        else if (securityTimelineResult.events.some(function (event) { return event.id === previousReference; })) { choices.val(previousReference); securitySelectEvent(); }
+        else { choices.val(''); securitySelectEvent(); }
+        output.append(list); $('#securityExportTimeline').prop('disabled', !securityTimelineResult.events.length);
         securityLoadDispositions();
     });
 }
@@ -109,9 +145,14 @@ function securityExportTimeline() {
     var link = document.createElement('a'); link.href = url; link.download = 'ddi-security-search.json'; link.click(); URL.revokeObjectURL(url);
 }
 function securityLoadDispositions() {
-    securityRequest('dispositions/list', 'GET', {}, function (response) { var list = $('#securityDispositions').empty(); response.response.dispositions.forEach(function (d) { list.append($('<li>').text(d.eventId + ' — ' + d.status + ' — ' + d.actor + ' — ' + d.notes)); }); });
+    securityRequest('dispositions/list', 'GET', {}, function (response) { var list = $('#securityDispositions').empty(); response.response.dispositions.forEach(function (d) { var item = $('<li>').text(productLabel(d.status) + ' · ' + d.actor + ' · ' + d.notes); item.append($('<details>').append($('<summary>').text('Event reference')).append($('<p>').text(d.eventId))); list.append(item); }); if (!response.response.dispositions.length) list.append($('<li>').text('No analyst reviews yet.')); });
+}
+function securitySelectEvent() {
+    var selected = $('#securityDispositionEvent').val(); $('#securityManualReference').toggle(selected === 'manual');
+    $('#securityDispositionId').val(selected === 'manual' ? '' : selected);
 }
 function securitySetDisposition() {
+    if (!$('#securityDispositionId').val()) { showAlert('warning', 'Select an event', 'Search the timeline and choose an event to review.'); return; }
     securityRequest('dispositions/set', 'POST', { eventId: $('#securityDispositionId').val(), status: $('#securityDispositionStatus').val(), notes: $('#securityDispositionNotes').val() }, securityLoadDispositions);
 }
 function securityLoadHistory() {

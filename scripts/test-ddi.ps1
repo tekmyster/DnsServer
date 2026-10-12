@@ -14,3 +14,5 @@ foreach ($testMode in @('', '--dhcp', '--netbox', '--transport', '--api', '--sec
     else { dotnet run --project $testProject -c Release --no-build }
     if ($LASTEXITCODE -ne 0) { throw "DDI checks failed: $testMode" }
 }
+node (Join-Path $PSScriptRoot 'test-product-ux.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Product UX presentation checks failed.' }

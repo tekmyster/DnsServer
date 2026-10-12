@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -28,8 +28,8 @@ function flushDnsCache(objBtn, node) {
         url: "api/cache/flush?node=" + encodeURIComponent(node),
         token: sessionData.token,
         success: function (responseJSON) {
-            $("#lstCachedZones").html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshCachedZonesList(); return false;\"><b>[refresh]</b></a></div>");
-            $("#txtCachedZoneViewerTitle").text("<ROOT>");
+            $("#lstCachedZones").html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshCachedZonesList(); return false;\"><b>Refresh</b></a></div>");
+            $("#txtCachedZoneViewerTitle").text("All domains");
             $("#btnDeleteCachedZone").hide();
             $("#preCachedZoneViewerBody").hide();
 
@@ -97,7 +97,7 @@ function refreshCachedZonesList(domain, direction) {
     if (domain == null) {
         domain = $("#txtCachedZoneViewerTitle").text();
 
-        if ((domain == null) || (domain == "<ROOT>"))
+        if ((domain == null) || (domain == "<ROOT>" || domain == "All domains"))
             domain = "";
     }
 
@@ -119,7 +119,7 @@ function refreshCachedZonesList(domain, direction) {
             var newDomain = responseJSON.response.domain;
             var zones = responseJSON.response.zones;
 
-            var list = "<div class=\"zone\"><a href=\"#\" onclick=\"refreshCachedZonesList('" + newDomain + "'); return false;\"><b>[refresh]</b></a></div>";
+            var list = "<div class=\"zone\"><a href=\"#\" onclick=\"refreshCachedZonesList('" + newDomain + "'); return false;\"><b>Refresh</b></a></div>";
 
             var parentDomain = getParentDomain(newDomain);
 
@@ -135,7 +135,7 @@ function refreshCachedZonesList(domain, direction) {
             lstCachedZones.html(list);
 
             if (newDomain == "") {
-                $("#txtCachedZoneViewerTitle").text("<ROOT>");
+                $("#txtCachedZoneViewerTitle").text("All domains");
                 $("#btnDeleteCachedZone").hide();
             }
             else {
@@ -148,9 +148,10 @@ function refreshCachedZonesList(domain, direction) {
             }
 
             if (responseJSON.response.records.length > 0) {
-                preCachedZoneViewerBody.text(JSON.stringify(responseJSON.response.records, null, 2));
+                productDnsView(preCachedZoneViewerBody, responseJSON.response.records);
                 preCachedZoneViewerBody.show();
             }
+            else { preCachedZoneViewerBody.text('No cached records at this level.').show(); }
 
             divCachedZoneViewer.show();
         },
@@ -158,7 +159,7 @@ function refreshCachedZonesList(domain, direction) {
             showPageLogin();
         },
         error: function () {
-            lstCachedZones.html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshCachedZonesList('" + domain + "'); return false;\"><b>[refresh]</b></a></div>");
+            lstCachedZones.html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshCachedZonesList('" + domain + "'); return false;\"><b>Refresh</b></a></div>");
 
             divCachedZoneViewer.show();
         },
@@ -238,8 +239,8 @@ function flushAllowedZone() {
         url: "api/allowed/flush",
         token: sessionData.token,
         success: function (responseJSON) {
-            $("#lstAllowedZones").html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshAllowedZonesList(); return false;\"><b>[refresh]</b></a></div>");
-            $("#txtAllowedZoneViewerTitle").text("<ROOT>");
+            $("#lstAllowedZones").html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshAllowedZonesList(); return false;\"><b>Refresh</b></a></div>");
+            $("#txtAllowedZoneViewerTitle").text("All domains");
             $("#btnDeleteAllowedZone").hide();
             $("#preAllowedZoneViewerBody").hide();
 
@@ -260,7 +261,7 @@ function refreshAllowedZonesList(domain, direction, fromPrimary) {
     if (domain == null) {
         domain = $("#txtAllowedZoneViewerTitle").text();
 
-        if ((domain == null) || (domain == "<ROOT>"))
+        if ((domain == null) || (domain == "<ROOT>" || domain == "All domains"))
             domain = "";
     }
 
@@ -282,7 +283,7 @@ function refreshAllowedZonesList(domain, direction, fromPrimary) {
             var newDomain = responseJSON.response.domain;
             var zones = responseJSON.response.zones;
 
-            var list = "<div class=\"zone\"><a href=\"#\" onclick=\"refreshAllowedZonesList('" + newDomain + "'); return false;\"><b>[refresh]</b></a></div>";
+            var list = "<div class=\"zone\"><a href=\"#\" onclick=\"refreshAllowedZonesList('" + newDomain + "'); return false;\"><b>Refresh</b></a></div>";
 
             var parentDomain = getParentDomain(newDomain);
 
@@ -298,7 +299,7 @@ function refreshAllowedZonesList(domain, direction, fromPrimary) {
             lstAllowedZones.html(list);
 
             if (newDomain == "") {
-                $("#txtAllowedZoneViewerTitle").text("<ROOT>");
+                $("#txtAllowedZoneViewerTitle").text("All domains");
             }
             else {
                 if (responseJSON.response.domainIdn == null)
@@ -308,13 +309,14 @@ function refreshAllowedZonesList(domain, direction, fromPrimary) {
             }
 
             if (responseJSON.response.records.length > 0) {
-                preAllowedZoneViewerBody.text(JSON.stringify(responseJSON.response.records, null, 2));
+                productDnsView(preAllowedZoneViewerBody, responseJSON.response.records);
                 preAllowedZoneViewerBody.show();
 
                 $("#btnDeleteAllowedZone").show();
             }
             else {
                 $("#btnDeleteAllowedZone").hide();
+                preAllowedZoneViewerBody.text('No allowed records at this level.').show();
             }
 
             divAllowedZoneViewer.show();
@@ -323,7 +325,7 @@ function refreshAllowedZonesList(domain, direction, fromPrimary) {
             showPageLogin();
         },
         error: function () {
-            lstAllowedZones.html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshAllowedZonesList('" + domain + "'); return false;\"><b>[refresh]</b></a></div>");
+            lstAllowedZones.html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshAllowedZonesList('" + domain + "'); return false;\"><b>Refresh</b></a></div>");
 
             divAllowedZoneViewer.show();
         },
@@ -403,8 +405,8 @@ function flushBlockedZone() {
         url: "api/blocked/flush",
         token: sessionData.token,
         success: function (responseJSON) {
-            $("#lstBlockedZones").html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshBlockedZonesList(); return false;\"><b>[refresh]</b></a></div>");
-            $("#txtBlockedZoneViewerTitle").text("<ROOT>");
+            $("#lstBlockedZones").html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshBlockedZonesList(); return false;\"><b>Refresh</b></a></div>");
+            $("#txtBlockedZoneViewerTitle").text("All domains");
             $("#btnDeleteBlockedZone").hide();
             $("#preBlockedZoneViewerBody").hide();
 
@@ -425,7 +427,7 @@ function refreshBlockedZonesList(domain, direction, fromPrimary) {
     if (domain == null) {
         domain = $("#txtBlockedZoneViewerTitle").text();
 
-        if ((domain == null) || (domain == "<ROOT>"))
+        if ((domain == null) || (domain == "<ROOT>" || domain == "All domains"))
             domain = "";
     }
 
@@ -447,7 +449,7 @@ function refreshBlockedZonesList(domain, direction, fromPrimary) {
             var newDomain = responseJSON.response.domain;
             var zones = responseJSON.response.zones;
 
-            var list = "<div class=\"zone\"><a href=\"#\" onclick=\"refreshBlockedZonesList('" + newDomain + "'); return false;\"><b>[refresh]</b></a></div>";
+            var list = "<div class=\"zone\"><a href=\"#\" onclick=\"refreshBlockedZonesList('" + newDomain + "'); return false;\"><b>Refresh</b></a></div>";
 
             var parentDomain = getParentDomain(newDomain);
 
@@ -463,7 +465,7 @@ function refreshBlockedZonesList(domain, direction, fromPrimary) {
             lstBlockedZones.html(list);
 
             if (newDomain == "") {
-                $("#txtBlockedZoneViewerTitle").text("<ROOT>");
+                $("#txtBlockedZoneViewerTitle").text("All domains");
             }
             else {
                 if (responseJSON.response.domainIdn == null)
@@ -473,13 +475,14 @@ function refreshBlockedZonesList(domain, direction, fromPrimary) {
             }
 
             if (responseJSON.response.records.length > 0) {
-                preBlockedZoneViewerBody.text(JSON.stringify(responseJSON.response.records, null, 2));
+                productDnsView(preBlockedZoneViewerBody, responseJSON.response.records);
                 preBlockedZoneViewerBody.show();
 
                 $("#btnDeleteBlockedZone").show();
             }
             else {
                 $("#btnDeleteBlockedZone").hide();
+                preBlockedZoneViewerBody.text('No blocked records at this level.').show();
             }
 
             divBlockedZoneViewer.show();
@@ -488,7 +491,7 @@ function refreshBlockedZonesList(domain, direction, fromPrimary) {
             showPageLogin();
         },
         error: function () {
-            lstBlockedZones.html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshBlockedZonesList('" + domain + "'); return false;\"><b>[refresh]</b></a></div>");
+            lstBlockedZones.html("<div class=\"zone\"><a href=\"#\" onclick=\"refreshBlockedZonesList('" + domain + "'); return false;\"><b>Refresh</b></a></div>");
 
             divBlockedZoneViewer.show();
         },

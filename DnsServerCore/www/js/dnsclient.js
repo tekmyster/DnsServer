@@ -25,7 +25,7 @@ $(function () {
         e.preventDefault();
 
         var itemText = $(this).text();
-        $(this).closest('.dropdown').find('input').val(itemText);
+        $(this).closest('.dropdown').find('input').val(itemText).data('selected-label', itemText).data('selected-server', $(this).attr('data-server'));
 
         if (itemText.indexOf("QUIC") !== -1)
             $("#optDnsClientProtocol").val("QUIC");
@@ -76,16 +76,18 @@ function loadServerList() {
 }
 
 function loadServerListFrom(responseJSON) {
-    $("#txtDnsClientNameServer").val("This Server {this-server}");
+    $("#txtDnsClientNameServer").val("This server");
 
-    var htmlList = "<li><a href=\"#\">This Server {this-server}</a></li>";
+    var htmlList = "<li><a href=\"#\" data-server=\"this-server\">This server</a></li>";
 
     for (var i = 0; i < responseJSON.length; i++) {
         for (var j = 0; j < responseJSON[i].addresses.length; j++) {
+            var specialName = { 'recursive-resolver': 'Recursive resolver', 'system-dns': 'System DNS' }[responseJSON[i].addresses[j]];
+            if (specialName) { htmlList += "<li><a href=\"#\" data-server=\"" + htmlEncode(responseJSON[i].addresses[j]) + "\">" + specialName + "</a></li>"; continue; }
             if ((responseJSON[i].name == null) || (responseJSON[i].name.length == 0))
-                htmlList += "<li><a href=\"#\">" + htmlEncode(responseJSON[i].addresses[j]) + "</a></li>";
+                htmlList += "<li><a href=\"#\" data-server=\"" + htmlEncode(responseJSON[i].addresses[j]) + "\">" + htmlEncode(responseJSON[i].addresses[j]) + "</a></li>";
             else
-                htmlList += "<li><a href=\"#\">" + htmlEncode(responseJSON[i].name) + " {" + htmlEncode(responseJSON[i].addresses[j]) + "}</a></li>";
+                htmlList += "<li><a href=\"#\" data-server=\"" + htmlEncode(responseJSON[i].addresses[j]) + "\">" + htmlEncode(responseJSON[i].name) + " (" + htmlEncode(responseJSON[i].addresses[j]) + ")</a></li>";
         }
     }
 
@@ -97,6 +99,8 @@ function resolveQuery(importRecords) {
         importRecords = false;
 
     var server = $("#txtDnsClientNameServer").val();
+    if (server === $('#txtDnsClientNameServer').data('selected-label') && $('#txtDnsClientNameServer').data('selected-server')) server = $('#txtDnsClientNameServer').data('selected-server');
+    server = { 'This server': 'this-server', 'Recursive resolver': 'recursive-resolver', 'System DNS': 'system-dns' }[server] || server;
 
     if ((server.indexOf("recursive-resolver") !== -1) || (server.indexOf("system-dns") !== -1))
         $("#optDnsClientProtocol").val("UDP");
@@ -170,7 +174,7 @@ function resolveQuery(importRecords) {
             btn.button("reset");
             btnOther.prop("disabled", false);
 
-            $("#preDnsClientFinalResponse").text(JSON.stringify(responseJSON.response.result, null, 2));
+            productDnsView($("#preDnsClientFinalResponse"), responseJSON.response.result);
             $("#divDnsClientFinalResponseCollapse").collapse("show");
             $("#divDnsClientRawResponsesCollapse").collapse("hide");
             divDnsClientOutputAccordion.show();
@@ -220,7 +224,7 @@ function resolveQuery(importRecords) {
     var containsServer = false;
 
     $("#optDnsClientNameServers a").each(function () {
-        if ($(this).html() === txtServerName)
+        if ($(this).text() === txtServerName)
             containsServer = true;
     });
 
@@ -232,7 +236,7 @@ function queryDnsServer(domain, type, node) {
     if (type == null)
         type = "A";
 
-    $("#txtDnsClientNameServer").val("This Server {this-server}");
+    $("#txtDnsClientNameServer").val("This server");
     $("#txtDnsClientDomain").val(domain);
     $("#optDnsClientType").val(type);
     $("#optDnsClientProtocol").val("UDP");

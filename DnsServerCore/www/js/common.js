@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -139,7 +139,7 @@ function HTTPRequest(url, method, data, isTextResponse, success, error, invalidT
                         if (invalidToken != null)
                             invalidToken();
                         else {
-                            showAlert("danger", "Error!", response.errorMessage + (showInnerError && (response.innerErrorMessage != null) ? " " + response.innerErrorMessage : ""), objAlertPlaceholder);
+                            showRequestError(response, showInnerError, objAlertPlaceholder);
 
                             if (error != null)
                                 error();
@@ -153,7 +153,7 @@ function HTTPRequest(url, method, data, isTextResponse, success, error, invalidT
                             twoFactorAuthRequired();
                         }
                         else {
-                            showAlert("danger", "Error!", response.errorMessage + (showInnerError && (response.innerErrorMessage != null) ? " " + response.innerErrorMessage : ""), objAlertPlaceholder);
+                            showRequestError(response, showInnerError, objAlertPlaceholder);
 
                             if (error != null)
                                 error();
@@ -162,7 +162,7 @@ function HTTPRequest(url, method, data, isTextResponse, success, error, invalidT
                         break;
 
                     case "error":
-                        showAlert("danger", "Error!", response.errorMessage + (showInnerError && (response.innerErrorMessage != null) ? " " + response.innerErrorMessage : ""), objAlertPlaceholder);
+                        showRequestError(response, showInnerError, objAlertPlaceholder);
 
                         if (error != null)
                             error();
@@ -170,7 +170,7 @@ function HTTPRequest(url, method, data, isTextResponse, success, error, invalidT
                         break;
 
                     default:
-                        showAlert("danger", "Invalid Response!", "Server returned invalid response status: " + response.status, objAlertPlaceholder);
+                        showAlert("danger", "Response unavailable", "The server returned an unexpected response. Refresh the current state before retrying a change.", objAlertPlaceholder);
 
                         if (error != null)
                             error();
@@ -190,8 +190,12 @@ function HTTPRequest(url, method, data, isTextResponse, success, error, invalidT
 
             if ((textStatus === "error") && (errorThrown === ""))
                 msg = "Unable to connect to the server. Please try again."
+            else if (textStatus === "timeout")
+                msg = "The server took too long to respond. Refresh the current state before retrying a change.";
+            else if (textStatus === "parsererror")
+                msg = "The server returned an unreadable response. Refresh the current state before retrying a change.";
             else
-                msg = textStatus + " - " + errorThrown;
+                msg = "The request could not be completed. Refresh the current state before retrying a change.";
 
             showAlert("danger", "Error!", msg, objAlertPlaceholder);
         }
@@ -200,10 +204,22 @@ function HTTPRequest(url, method, data, isTextResponse, success, error, invalidT
     return successFlag;
 }
 
+function showRequestError(response, showInnerError, placeholder) {
+    var message = response.errorMessage || 'The request could not be completed.';
+    var technical = /(?:System\.[\w.]+Exception|\bat (?:DnsServerCore|TechnitiumLibrary)\.|^\s*\{\s*")/.test(message);
+    showAlert('danger', 'Unable to complete action', technical ? 'The server could not complete this request. Refresh the current state and try again.' : message, placeholder);
+    if (technical || showInnerError && response.innerErrorMessage) {
+        var target = placeholder || $('.AlertPlaceholder');
+        target.find('.alert').append($('<details>').append($('<summary>').text('Technical details')).append($('<pre>').text(message + (showInnerError && response.innerErrorMessage ? '\n' + response.innerErrorMessage : ''))));
+    }
+}
 function showAlert(type, title, message, objAlertPlaceholder) {
-    var alertHTML = "<div class=\"alert alert-" + type + "\">\
-    <button type=\"button\" class=\"close\" data-dismiss=\"alert\">&times;</button>\
-    <strong>" + title + "</strong>&nbsp;" + htmlEncode(message) + "\
+    message = String(message || '').replace(/^Please enter a value for /, 'Enter ').replace(/^Please enter /, 'Enter ');
+    var titles = { 'Error!': 'Unable to complete action', 'Missing!': 'Required value', 'Invalid Character!': 'Invalid value', 'Success!': 'Done', 'Warning!': 'Review required', 'Invalid Response!': 'Response unavailable' };
+    title = titles[title] || String(title || '').replace(/!$/, '');
+    var alertHTML = "<div class=\"alert alert-" + type + "\" role=\"" + (type === 'danger' ? 'alert' : 'status') + "\" aria-live=\"" + (type === 'danger' ? 'assertive' : 'polite') + "\">\
+    <button type=\"button\" class=\"close\" data-dismiss=\"alert\" aria-label=\"Dismiss notification\">&times;</button>\
+    <strong>" + htmlEncode(title) + "</strong>&nbsp;" + htmlEncode(message) + "\
     </div>";
 
     if (objAlertPlaceholder == null)

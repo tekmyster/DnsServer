@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -110,7 +110,7 @@ function showPageMain() {
     $("#divDhcpViewScopes").show();
     $("#divDhcpEditScope").hide();
 
-    $("#txtDnsClientNameServer").val("This Server {this-server}");
+    $("#txtDnsClientNameServer").val("This server");
     $("#txtDnsClientDomain").val("");
     $("#optDnsClientType").val("A");
     $("#optDnsClientProtocol").val("UDP");
@@ -3257,6 +3257,14 @@ function changeTheme(newTheme) {
     }
 
     localStorage.setItem("theme", newTheme);
+
+    var chartText = document.body.classList.contains('amber-mode') ? '#ffb000' : document.body.classList.contains('dark-mode') ? '#dcdcdc' : '#555555';
+    Chart.defaults.global.defaultFontColor = chartText;
+    [window.chartDashboardMain, window.chartDashboardPie, window.chartDashboardPie2, window.chartDashboardPie3].forEach(function (chart) {
+        if (!chart) return;
+        if (chart.options.legend && chart.options.legend.labels) chart.options.legend.labels.fontColor = chartText;
+        if (chart.options.scales) ['xAxes', 'yAxes'].forEach(function (axis) { (chart.options.scales[axis] || []).forEach(function (scale) { if (scale.ticks) scale.ticks.fontColor = chartText; }); });
+    });
 
     if (window.chartDashboardMain) {
         window.chartDashboardMain.update();

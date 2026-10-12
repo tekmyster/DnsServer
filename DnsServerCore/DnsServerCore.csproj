@@ -105,6 +105,7 @@
 		<None Remove="www\js\Chart.min.js" />
 		<None Remove="www\js\cluster.js" />
 		<None Remove="www\js\common.js" />
+		<None Remove="www\js\product-ux.js" />
 		<None Remove="www\js\dhcp.js" />
 		<None Remove="www\js\dnsclient.js" />
 		<None Remove="www\js\jquery.min.js" />
@@ -280,6 +281,7 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="www\js\ddi.js"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+		<Content Include="www\js\product-ux.js"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
 		<Content Include="www\js\ipam.js">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>

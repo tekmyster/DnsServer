@@ -89,6 +89,8 @@ namespace DnsServerCore
         readonly WebServiceAppsApi _appsApi;
         readonly WebServiceSettingsApi _settingsApi;
         readonly WebServiceDhcpApi _dhcpApi;
+        readonly WebServiceIpamApi _ipamApi;
+        readonly DnsServerCore.Ipam.IpamManager _ipam;
         readonly WebServiceAuthApi _authApi;
         readonly WebServiceClusterApi _clusterApi;
         readonly WebServiceLogsApi _logsApi;
@@ -183,6 +185,8 @@ namespace DnsServerCore
             _appsApi = new WebServiceAppsApi(this);
             _settingsApi = new WebServiceSettingsApi(this);
             _dhcpApi = new WebServiceDhcpApi(this);
+            _ipam = new DnsServerCore.Ipam.IpamManager(Path.Combine(_configFolder, "ipam.json"));
+            _ipamApi = new WebServiceIpamApi(this);
             _authApi = new WebServiceAuthApi(this);
             _clusterApi = new WebServiceClusterApi(this);
             _logsApi = new WebServiceLogsApi(this);
@@ -690,6 +694,13 @@ namespace DnsServerCore
 
                 if (dnsSettings)
                 {
+                    // IPAM intent travels with shared settings. Export a coherent snapshot under its own lock.
+                    ZipArchiveEntry ipamEntry = backupZip.CreateEntry("ipam.json");
+                    using (Stream ipamStream = ipamEntry.Open())
+                    {
+                        byte[] inventory = _ipam.Export();
+                        ipamStream.Write(inventory, 0, inventory.Length);
+                    }
                     string dnsConfigFile = Path.Combine(_configFolder, "dns.config");
 
                     if (File.Exists(dnsConfigFile) && (File.GetLastWriteTimeUtc(dnsConfigFile) > ifModifiedSince))
@@ -1052,6 +1063,14 @@ namespace DnsServerCore
 
                     if (dnsSettings)
                     {
+                        ZipArchiveEntry ipamEntry = backupZip.GetEntry("ipam.json");
+                        if (ipamEntry is not null)
+                        {
+                            using Stream ipamStream = ipamEntry.Open();
+                            using MemoryStream inventory = new MemoryStream();
+                            ipamStream.CopyTo(inventory);
+                            _ipam.Restore(inventory.ToArray());
+                        }
                         ZipArchiveEntry entry = backupZip.GetEntry("dns.config");
                         if (entry is not null)
                         {
@@ -2199,6 +2218,15 @@ namespace DnsServerCore
             _webService.MapGetAndPost("/api/settings/temporaryDisableBlocking", _settingsApi.TemporaryDisableBlocking);
             _webService.MapGetAndPost("/api/settings/backup", _settingsApi.BackupSettingsAsync);
             _webService.MapPost("/api/settings/restore", _settingsApi.RestoreSettingsAsync);
+
+            // IPAM intent uses POST mutations and the existing authenticated API pipeline.
+            _webService.MapGetAndPost("/api/ipam/list", _ipamApi.List);
+            _webService.MapGetAndPost("/api/ipam/subnets/inspect", _ipamApi.Inspect);
+            _webService.MapGetAndPost("/api/ipam/addresses/nextAvailable", _ipamApi.NextAvailable);
+            _webService.MapPost("/api/ipam/views/set", _ipamApi.SetView);
+            _webService.MapPost("/api/ipam/subnets/set", _ipamApi.SetSubnet);
+            _webService.MapPost("/api/ipam/assignments/set", _ipamApi.SetAssignment);
+            _webService.MapPost("/api/ipam/delete", _ipamApi.Delete);
 
             //dhcp
             _webService.MapGetAndPost("/api/dhcp/leases/list", _dhcpApi.ListDhcpLeases);

@@ -50,6 +50,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <script src="js/apps.js"></script>
     <script src="js/dnsclient.js"></script>
     <script src="js/dhcp.js"></script>
+    <script src="js/ipam.js"></script>
     <script src="js/logs.js"></script>
 </head>
 <body>
@@ -154,6 +155,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                 <li id="mainPanelTabListDnsClient" role="presentation"><a href="#mainPanelTabPaneDnsClient" aria-controls="mainPanelTabPaneDnsClient" role="tab" data-toggle="tab">DNS Client</a></li>
                                 <li id="mainPanelTabListSettings" role="presentation"><a href="#mainPanelTabPaneSettings" aria-controls="mainPanelTabPaneSettings" role="tab" data-toggle="tab" onclick="refreshDnsSettings();">Settings</a></li>
                                 <li id="mainPanelTabListDhcp" role="presentation"><a href="#mainPanelTabPaneDhcp" aria-controls="mainPanelTabPaneDhcp" role="tab" data-toggle="tab" onclick="refreshDhcpTab();">DHCP</a></li>
+                                <li id="mainPanelTabListIpam" role="presentation"><a href="#mainPanelTabPaneIpam" aria-controls="mainPanelTabPaneIpam" role="tab" data-toggle="tab" onclick="refreshIpam();">IPAM</a></li>
                                 <li id="mainPanelTabListAdmin" role="presentation"><a href="#mainPanelTabPaneAdmin" aria-controls="mainPanelTabPaneAdmin" role="tab" data-toggle="tab" onclick="refreshAdminTab();">Administration</a></li>
                                 <li id="mainPanelTabListLogs" role="presentation"><a href="#mainPanelTabPaneLogs" aria-controls="mainPanelTabPaneLogs" role="tab" data-toggle="tab" onclick="refreshLogsTab();">Logs</a></li>
                                 <li id="mainPanelTabListAbout" role="presentation"><a href="#mainPanelTabPaneAbout" aria-controls="mainPanelTabPaneAbout" role="tab" data-toggle="tab">About</a></li>
@@ -2484,6 +2486,66 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
                                 </div>
 
+                                <div id="mainPanelTabPaneIpam" role="tabpanel" class="tab-pane" style="padding: 15px 0;">
+                                    <h3>IP address management</h3>
+                                    <p>Manage intended address assignments and compare them with linked DNS zones and DHCP scopes.</p>
+                                    <p id="ipamRevision"></p>
+                                    <button class="btn btn-default" onclick="refreshIpam();">Refresh inventory</button>
+                                    <div class="ipam-edit">
+                                        <h4>New network view</h4>
+                                        <form class="form-inline" onsubmit="ipamSave('view'); return false;">
+                                            <label>Name <input id="ipamViewName" class="form-control" required maxlength="255" /></label>
+                                            <label>Description <input id="ipamViewDescription" class="form-control" /></label>
+                                            <button class="btn btn-primary" type="submit">Add view</button>
+                                        </form>
+                                        <h4>Subnet or container</h4>
+                                        <form onsubmit="ipamSave('subnet'); return false;">
+                                            <input type="hidden" id="ipamSubnetId" />
+                                            <div class="row">
+                                                <div class="col-sm-4"><label for="ipamView">Network view</label><select id="ipamView" class="form-control"></select></div>
+                                                <div class="col-sm-4"><label for="ipamPrefix">IPv4 or IPv6 prefix</label><input id="ipamPrefix" class="form-control" placeholder="10.20.0.0/24 or 2001:db8::/64" required /></div>
+                                                <div class="col-sm-4"><label for="ipamSubnetName">Name</label><input id="ipamSubnetName" class="form-control" required maxlength="255" /></div>
+                                            </div>
+                                            <div class="row">
+                                                <div class="col-sm-3"><label for="ipamSite">Site</label><input id="ipamSite" class="form-control" /></div>
+                                                <div class="col-sm-3"><label for="ipamVlan">VLAN</label><input id="ipamVlan" class="form-control" type="number" min="1" max="4094" /></div>
+                                                <div class="col-sm-3"><label for="ipamDhcpScope">Linked DHCP scope</label><input id="ipamDhcpScope" class="form-control" /></div>
+                                                <div class="col-sm-3"><label for="ipamDnsZone">Linked DNS zone</label><input id="ipamDnsZone" class="form-control" /></div>
+                                            </div>
+                                            <p><label><input id="ipamContainer" type="checkbox" /> Container for child prefixes</label></p>
+                                            <button class="btn btn-primary" type="submit">Save subnet</button>
+                                            <button class="btn btn-default" type="button" onclick="$('#ipamSubnetId').val('');">Save next as new</button>
+                                        </form>
+                                    </div>
+                                    <h4>Network inventory</h4>
+                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>View</th><th>Name</th><th>Prefix</th><th>Type</th><th>Site</th><th>VLAN</th><th>DHCP scope</th><th>DNS zone</th><th>Actions</th></tr></thead><tbody id="ipamSubnetsBody"></tbody></table></div>
+                                    <div class="ipam-edit">
+                                        <h4>Address assignment</h4>
+                                        <p>Assignments record intent. They do not automatically create DNS records or DHCP reservations. Suggested addresses reflect current inventory and linked observations.</p>
+                                        <form onsubmit="ipamSave('assignment'); return false;">
+                                            <input type="hidden" id="ipamAssignmentId" />
+                                            <div class="row">
+                                                <div class="col-sm-4"><label for="ipamSubnet">Subnet</label><select id="ipamSubnet" class="form-control"></select></div>
+                                                <div class="col-sm-4"><label for="ipamAddress">Address</label><input id="ipamAddress" class="form-control" required /></div>
+                                                <div class="col-sm-4"><label for="ipamHostName">Hostname</label><input id="ipamHostName" class="form-control" /></div>
+                                            </div>
+                                            <div class="row">
+                                                <div class="col-sm-4"><label for="ipamOwner">Owner</label><input id="ipamOwner" class="form-control" /></div>
+                                                <div class="col-sm-4"><label for="ipamStatus">Status</label><select id="ipamStatus" class="form-control"><option>Assigned</option><option>Reserved</option><option>Deprecated</option></select></div>
+                                                <div class="col-sm-4"><label for="ipamDescription">Description</label><input id="ipamDescription" class="form-control" /></div>
+                                            </div><br />
+                                            <button class="btn btn-default" type="button" onclick="ipamNextAvailable();">Suggest available address</button>
+                                            <button class="btn btn-primary" type="submit">Save assignment</button>
+                                            <button class="btn btn-default" type="button" onclick="$('#ipamAssignmentId').val('');">Save next as new</button>
+                                        </form>
+                                    </div>
+                                    <h4>Assignments</h4>
+                                    <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Subnet</th><th>Address</th><th>Hostname</th><th>Owner</th><th>Status</th><th>Description</th><th>Actions</th></tr></thead><tbody id="ipamAssignmentsBody"></tbody></table></div>
+                                    <h4>Reconciliation and utilization</h4>
+                                    <div class="form-inline"><label for="ipamInspectSubnet">Subnet</label> <select id="ipamInspectSubnet" class="form-control"></select> <button class="btn btn-default" onclick="inspectIpam();">Inspect linked services</button></div>
+                                    <div id="ipamInspection" style="margin-top: 15px;"></div>
+                                    <h4>Recent changes</h4><ul id="ipamHistory"></ul>
+                                </div>
                                 <div id="mainPanelTabPaneDhcp" role="tabpanel" class="tab-pane" style="padding: 10px 0 0 0;">
 
                                     <ul class="nav nav-tabs" role="tablist">

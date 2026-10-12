@@ -234,9 +234,11 @@ function showPageMain() {
 
     if (sessionData.info.permissions.Settings.canView) {
         $("#mainPanelTabListSettings").show();
+        $("#mainPanelTabListIpam").show();
     }
     else {
         $("#mainPanelTabListSettings").hide();
+        $("#mainPanelTabListIpam").hide();
     }
 
     if (sessionData.info.permissions.DhcpServer.canView) {

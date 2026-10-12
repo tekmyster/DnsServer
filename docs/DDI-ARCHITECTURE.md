@@ -4,6 +4,8 @@ Build a unified DNS, DHCP, and IP address management platform on Technitium, wit
 
 ## Product scope
 
+All software capabilities belong in the open source edition without subscription checks, paid tiers, or feature gates. Optional third-party services and commercial intelligence sources are independent integrations. Measure improvement through capability acceptance tests, reliability and recovery results, performance, accessibility, operational effort, and interoperability; do not claim superiority without evidence.
+
 The proposed initial deployment is a self hosted management service and a cluster supporting three or more DNS and DHCP service nodes. DHCP synchronization must support a configurable node count and must not be restricted to a two server failover pair. Organization size and the first security milestone remain product decisions. Existing DNS behavior should remain compatible unless an administrator explicitly enables a new policy.
 
 Infoblox provides a useful capability reference: unified DNS, DHCP, and IPAM management; asset discovery; DHCP fingerprinting; identity mapping; and security investigation using network context. Its DNS firewall combines policy and threat intelligence with DHCP and IPAM context. These are capability goals, rather than a claim of compatibility with Infoblox APIs, feeds, or proprietary detection systems.
@@ -49,6 +51,8 @@ Start behavioral detections in monitor mode. DNS tunneling and domain generation
 DNSSEC validation and policy response rewriting need explicit tests. Include cached answers, CNAME chains, negative answers, encrypted transports, IPv6 clients, forwarding groups, and upstream failures in policy coverage.
 
 ## IPAM and DHCP behavior
+
+The first persisted IPAM implementation and its current limits are described in [IPAM source of truth and implementation](IPAM.md). NetBox integration requires explicit object authority and provenance. The security requirements, intelligence integration, and scoring design are described in [DDI security module requirements](DDI-SECURITY.md).
 
 Model network views, sites, subnets, pools, address assignments, reservations, devices, and lease observations as distinct entities. Enforce address uniqueness within a network view and reject invalid or conflicting allocation requests atomically. Maintain desired configuration separately from node observations so reconciliation does not silently overwrite an operator's intent.
 

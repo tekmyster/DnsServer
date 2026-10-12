@@ -17,6 +17,12 @@ Nobody really bothers about domain name resolution since it works automatically 
 
 Be it a home network or an organization's network, having a locally running DNS server gives you more insights into your network and helps to understand it better using the DNS logs and stats. It improves overall performance since most queries are served from the DNS cache making web sites load faster by not having to wait for frequent DNS resolutions. It also gives you an additional control over your network allowing you to block domain names network wide and also allows you to route your DNS traffic securely using encrypted DNS protocols.
 
+## Security DDI fork development
+
+This fork is developing an open source DDI platform with IPAM as a network source of truth, multi-node DHCP synchronization, and DNS security capabilities without paid software feature tiers. The upstream DNS and DHCP engines remain the foundation.
+
+The first IPAM slice adds a persisted IPv4/IPv6 inventory, network views, prefix containers, assignments, a console tab, authenticated APIs, and reconciliation with explicitly linked DNS zones and DHCP scopes. Full service provisioning, NetBox synchronization, distributed DHCP allocation, discovery, and behavioral security analytics remain under development. See the [architecture](docs/DDI-ARCHITECTURE.md), [IPAM implementation](docs/IPAM.md), [DHCP synchronization design](docs/DHCP-SYNCHRONIZATION.md), and [security requirements](docs/DDI-SECURITY.md) for scope and validation.
+
 # Sponsored By
 <p align="center">
 	<a href="https://www.wavspeed.com/" target="_blank"><img src="https://technitium.com/img/logo-wavspeed.png" width="350" alt="Technology Investors and Integrators | WavSpeed Inc | Texas" title="Technology Investors and Integrators | WavSpeed Inc | Texas" /></a>

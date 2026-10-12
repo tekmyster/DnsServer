@@ -4,7 +4,7 @@ Build a unified DNS, DHCP, and IP address management platform on Technitium, wit
 
 ## Product scope
 
-The proposed initial deployment is a self hosted controller managing one or more service nodes. Organization size and the first security milestone remain product decisions. Existing DNS behavior should remain compatible unless an administrator explicitly enables a new policy.
+The proposed initial deployment is a self hosted management service and a cluster supporting three or more DNS and DHCP service nodes. DHCP synchronization must support a configurable node count and must not be restricted to a two server failover pair. Organization size and the first security milestone remain product decisions. Existing DNS behavior should remain compatible unless an administrator explicitly enables a new policy.
 
 Infoblox provides a useful capability reference: unified DNS, DHCP, and IPAM management; asset discovery; DHCP fingerprinting; identity mapping; and security investigation using network context. Its DNS firewall combines policy and threat intelligence with DHCP and IPAM context. These are capability goals, rather than a claim of compatibility with Infoblox APIs, feeds, or proprietary detection systems.
 
@@ -56,7 +56,7 @@ Use lease timestamps to correlate DNS activity with MAC and client identifiers. 
 
 IPv6 IPAM can precede DHCPv6 service. Full DHCPv6 and DHCP high availability require protocol and state replication work; neither should be advertised based solely on existing IPv6 DNS support or DNS clustering.
 
-DHCP synchronization is a core requirement for the first functional milestone. Synchronize scope configuration, reservations, and lease state while retaining node specific interface and listener settings. The cluster configuration transfer currently passes `scopes: false` on export and restore; changing these flags alone would not implement safe DHCP synchronization. See [DHCP synchronization design](DHCP-SYNCHRONIZATION.md) for replication, allocation ownership, and acceptance requirements. Automatic versus manual takeover remains a product decision.
+DHCP synchronization across three or more servers is a core requirement for the first functional milestone. Synchronize scope configuration, reservations, and lease state while retaining node specific interface and listener settings. Use three or five voting nodes for consensus and allow additional nonvoting replicas. Different nodes may own different scopes, with one active allocator per scope. Allocation and renewal acknowledgements require a committed mutation durably replicated to a voting majority; disconnected replicas catch up without blocking the connected majority. The cluster configuration transfer currently passes `scopes: false` on export and restore; changing these flags alone would not implement safe DHCP synchronization. See [DHCP synchronization design](DHCP-SYNCHRONIZATION.md) for replication, allocation ownership, and acceptance requirements. Automatic versus manual takeover remains a product decision.
 
 ## Security and operational requirements
 
@@ -71,7 +71,7 @@ Benchmark cache hits, cache misses, blocked queries, policy exceptions, CNAME pr
 ## Implementation milestones
 
 1. **Development baseline.** Fork upstream, preserve license and attribution, build the existing application, record dependency revisions, and provide a repeatable build entry point. Keep runtime behavior unchanged at this stage.
-2. **DHCP synchronization and inventory.** Implement replicated scope configuration, reservations, and durable lease events with explicit allocation ownership and replica recovery. Add network views, subnets, address assignments, lease history ingestion, conflict handling, and read APIs. Demonstrate correct historical attribution when an IP is reused by another device and safe behavior during a partition.
+2. **DHCP synchronization and inventory.** Implement replicated scope configuration, reservations, and durable lease events with explicit allocation ownership, consensus, membership changes, and replica recovery across three or more nodes. Add network views, subnets, address assignments, lease history ingestion, conflict handling, and read APIs. Demonstrate correct historical attribution when an IP is reused by another device and safe behavior during three and five node partitions.
 3. **Protective DNS.** Implement a versioned policy model, feed ingestion, local enforcement, explicit exceptions, decision events, and policy simulation. Demonstrate unchanged enforcement when the controller is unavailable and atomic rollback of a bad revision.
 4. **Unified operations.** Add inventory and security views, reservation and DNS workflows, scoped permissions, structured audit records, node reconciliation, and SIEM export. Test partial deployment and failed rollback cases.
 5. **Advanced detection and availability.** Add monitor mode tunneling and DGA analytics with measured false positives, DHCPv6, DHCP failover, controller availability, recovery exercises, and compatibility migrations.

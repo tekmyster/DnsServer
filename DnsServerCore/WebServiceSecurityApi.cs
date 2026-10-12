@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using TechnitiumLibrary;
 
 namespace DnsServerCore
@@ -48,6 +49,33 @@ namespace DnsServerCore
             public void Events(HttpContext context)
             {
                 Authorize(context, PermissionFlag.View); Write(context, "events", _service._security.RecentEvents()); Write(context, "signals", _service._security.Signals());
+            }
+            public void History(HttpContext context)
+            { Authorize(context, PermissionFlag.View); Write(context, "policies", _service._security.PolicyHistory().Select(p => new { p.Revision, p.Enabled, p.Mode, indicators = p.Indicators.Length }).ToArray()); }
+            public void Rollback(HttpContext context)
+            {
+                User user = Authorize(context, PermissionFlag.Modify);
+                long revision = long.Parse(context.Request.GetQueryOrForm("revision")); long target = long.Parse(context.Request.GetQueryOrForm("targetRevision"));
+                var policy = _service._security.PolicyHistory().SingleOrDefault(p => p.Revision == target) ?? throw new ArgumentException("Policy revision is not retained.");
+                if (policy.Misp != _service._security.Policy.Misp && !_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to change MISP configuration.");
+                _service._security.SetPolicy(policy, revision);
+                if (_service._clusterManager.ClusterInitialized) _service._clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
+                _service._log.Write(_service.GetRemoteEndPoint(context), "[" + user.Username + "] Rolled back security policy content from revision " + target + " as new revision " + _service._security.Policy.Revision);
+                Write(context, "policy", _service._security.Policy);
+            }
+            public async Task Search(HttpContext context)
+            {
+                Authorize(context, PermissionFlag.View);
+                var from = DateTimeOffset.Parse(context.Request.GetQueryOrForm("from"), System.Globalization.CultureInfo.InvariantCulture).UtcDateTime;
+                var to = DateTimeOffset.Parse(context.Request.GetQueryOrForm("to"), System.Globalization.CultureInfo.InvariantCulture).UtcDateTime;
+                Write(context, "search", await _service._security.SearchEventsAsync(from, to, context.Request.GetQueryOrForm("client", ""), context.Request.GetQueryOrForm("query", ""), int.Parse(context.Request.GetQueryOrForm("limit", "200")), context.RequestAborted));
+            }
+            public void Dispositions(HttpContext context)
+            { Authorize(context, PermissionFlag.View); Write(context, "dispositions", _service._security.Dispositions()); }
+            public void SetDisposition(HttpContext context)
+            {
+                User user = Authorize(context, PermissionFlag.Modify);
+                Write(context, "disposition", _service._security.SetDisposition(context.Request.GetQueryOrForm("eventId"), context.Request.GetQueryOrForm("status"), context.Request.GetQueryOrForm("notes", ""), user.Username));
             }
             public void Simulate(HttpContext context)
             {

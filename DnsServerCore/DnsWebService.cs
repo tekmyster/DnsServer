@@ -195,6 +195,8 @@ namespace DnsServerCore
             string suffixFile = Path.Combine(_appFolder, "Security", "public_suffix_list.dat");
             _security = new Security.DdiSecurityManager(_configFolder, new Security.PublicSuffixes(File.ReadLines(suffixFile)));
             _securityApi = new WebServiceSecurityApi(this);
+            _allocation = new DistributedAllocation(Path.Combine(_configFolder, "dhcp-allocation.json"));
+            _netbox = new Ipam.NetBoxConnector(_configFolder);
             _authApi = new WebServiceAuthApi(this);
             _clusterApi = new WebServiceClusterApi(this);
             _logsApi = new WebServiceLogsApi(this);
@@ -256,6 +258,9 @@ namespace DnsServerCore
                 }
             }
 
+            _allocationStop.Cancel();
+            await _allocation.DisposeAsync();
+            _netbox.Dispose();
             await StopAsync();
 
             await _security.DisposeAsync();
@@ -713,6 +718,10 @@ namespace DnsServerCore
                     }
                     using (Stream policyStream = backupZip.CreateEntry("security.json").Open())
                     { byte[] policy = _security.ExportPolicy(); policyStream.Write(policy, 0, policy.Length); }
+                    using (Stream allocationStream = backupZip.CreateEntry("dhcp-allocation.json").Open())
+                    { byte[] allocation = _allocation.Export(); allocationStream.Write(allocation, 0, allocation.Length); }
+                    using (Stream netboxStream = backupZip.CreateEntry("netbox-ddi.json").Open())
+                    { byte[] configuration = _netbox.ExportConfiguration(); netboxStream.Write(configuration, 0, configuration.Length); }
                     using (Stream signalsStream = backupZip.CreateEntry("security-signals.json").Open())
                     { byte[] signals = _security.ExportSignals(); signalsStream.Write(signals, 0, signals.Length); }
                     using (Stream enrichmentStream = backupZip.CreateEntry("security-misp.json").Open())
@@ -1079,6 +1088,12 @@ namespace DnsServerCore
 
                     if (dnsSettings)
                     {
+                        ZipArchiveEntry netboxEntry = backupZip.GetEntry("netbox-ddi.json");
+                        if (netboxEntry is not null)
+                        { using Stream source = netboxEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _netbox.RestoreConfiguration(bytes.ToArray()); }
+                        ZipArchiveEntry allocationEntry = backupZip.GetEntry("dhcp-allocation.json");
+                        if (allocationEntry is not null)
+                        { using Stream source = allocationEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); await InstallAllocationPlans(System.Text.Json.JsonSerializer.Deserialize<AllocationState>(bytes.ToArray(), DistributedAllocation.JsonOptions)); }
                         ZipArchiveEntry securityEntry = backupZip.GetEntry("security.json");
                         if (securityEntry is not null)
                         { using Stream source = securityEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _security.RestorePolicy(bytes.ToArray()); }
@@ -2258,6 +2273,21 @@ namespace DnsServerCore
             _webService.MapGetAndPost("/api/security/events/list", _securityApi.Events);
             _webService.MapGetAndPost("/api/security/simulate", _securityApi.Simulate);
             _webService.MapPost("/api/security/signals/ingest", _securityApi.IngestSignals);
+            _webService.MapGetAndPost("/api/security/policy/history", _securityApi.History);
+            _webService.MapPost("/api/security/policy/rollback", _securityApi.Rollback);
+            _webService.MapGetAndPost("/api/security/events/search", _securityApi.Search);
+            _webService.MapGetAndPost("/api/security/dispositions/list", _securityApi.Dispositions);
+            _webService.MapPost("/api/security/dispositions/set", _securityApi.SetDisposition);
+            _webService.MapGetAndPost("/api/ddi/dhcp/state/get", GetAllocationState);
+            _webService.MapPost("/api/ddi/dhcp/state/ingest", IngestAllocationState);
+            _webService.MapPost("/api/ddi/dhcp/plan/set", SetAllocationPlan);
+            _webService.MapPost("/api/ddi/dhcp/grant", GrantAllocation);
+            _webService.MapPost("/api/ddi/dhcp/prepare", PrepareAllocation);
+            _webService.MapGetAndPost("/api/ddi/dhcp/history/lookup", LookupAllocationHistory);
+            _webService.MapGetAndPost("/api/ipam/netbox/settings/get", GetNetBoxSettings);
+            _webService.MapPost("/api/ipam/netbox/settings/set", SetNetBoxSettings);
+            _webService.MapPost("/api/ipam/netbox/preview", PreviewNetBox);
+            _webService.MapPost("/api/ipam/netbox/apply", ApplyNetBox);
 
             //dhcp
             _webService.MapGetAndPost("/api/dhcp/leases/list", _dhcpApi.ListDhcpLeases);
@@ -2381,6 +2411,9 @@ namespace DnsServerCore
                 case "/api/user/session/get":
                 case "/api/user/session/delete":
                 case "/api/security/signals/ingest":
+                case "/api/ddi/dhcp/state/ingest":
+                case "/api/ddi/dhcp/grant":
+                case "/api/ddi/dhcp/prepare":
                     return ClusterNodeType.Secondary; //this api must be called on current node
 
                 default:
@@ -2972,6 +3005,9 @@ namespace DnsServerCore
                 //init dhcp server
                 _dhcpServer = new DhcpServer(Path.Combine(_configFolder, "scopes"), _log);
                 _dhcpServer.SecurityManager = _security;
+                _dhcpServer.Allocation = _allocation;
+                _dhcpServer.BorrowCapacity = BorrowAllocation;
+                _allocation.NodeName = () => _clusterManager?.ClusterInitialized == true ? _clusterManager.GetSelfNode().Name : _allocation.PersistedNode ?? _dnsServer.ServerDomain;
                 _security.NodeName = () => _clusterManager?.ClusterInitialized == true ? _clusterManager.GetSelfNode().Name : _dnsServer.ServerDomain;
                 _security.DeviceResolver = ResolveSecurityDevice;
                 _security.DeviceContextChanged = () => { lock (_securityDeviceLock) _securityDeviceCacheUntil = DateTime.MinValue; };
@@ -3046,6 +3082,7 @@ namespace DnsServerCore
                 await _dnsServer.StartAsync(throwIfBindFails);
                 _dhcpServer.Start();
                 _security.Start();
+                _allocation.Start(SynchronizeAllocation);
 
                 _log.Write("DNS Server (v" + _currentVersion.ToString() + ") was started successfully.");
                 _isRunning = true;
@@ -3112,7 +3149,20 @@ namespace DnsServerCore
                     }
                     _securityDeviceCacheUntil = now.AddSeconds(1);
                 }
-                if (_securityDevices.TryGetValue(address, out var context) && context.Lease.LeaseExpires > now && context.Scope.Leases.TryGetValue(context.Lease.ClientIdentifier, out var active) && ReferenceEquals(context.Lease, active)) return context.Device;
+                if (_securityDevices.TryGetValue(address, out var context) && context.Lease.LeaseExpires > now && context.Scope.Leases.TryGetValue(context.Lease.ClientIdentifier, out var active) && ReferenceEquals(context.Lease, active))
+                {
+                    if (address.AddressFamily == AddressFamily.InterNetwork && _allocation.HasLiveConflict(AllocationSequence.Number(address), context.Device.ClientIdentifier, context.Device.HardwareAddress)) return null;
+                    return context.Device;
+                }
+                if (address.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    var synchronized = _allocation.ResolveLive(AllocationSequence.Number(address));
+                    if (synchronized is not null)
+                    {
+                        var subnet = Array.Find(_ipam.GetSubnets(), s => string.Equals(s.DhcpScope, synchronized.Scope, StringComparison.OrdinalIgnoreCase));
+                        return new(synchronized.Scope, synchronized.Lease.Client, synchronized.Lease.Hardware, synchronized.Lease.Host, subnet?.ViewId ?? "", subnet?.Site ?? "", subnet?.Vlan);
+                    }
+                }
                 return null;
             }
         }

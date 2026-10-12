@@ -105,6 +105,10 @@ namespace DnsServerCore
                         if (lease.LeaseExpires > DateTime.UtcNow && network.Contains(lease.Address)) result.Add(new IpamObservation(lease.Address.ToString(), "DhcpLease", scope.Name, lease.HostName, lease.ClientIdentifier.ToString(), lease.LeaseExpires));
                     foreach (Lease lease in scope.ReservedLeases)
                         if (network.Contains(lease.Address)) result.Add(new IpamObservation(lease.Address.ToString(), "DhcpReservation", scope.Name, lease.HostName, lease.ClientIdentifier.ToString(), null));
+                    foreach (var replica in _service._allocation.Snapshot().Replicas.Where(r => r.Scope == subnet.DhcpScope))
+                        foreach (var lease in replica.Entries.Where(e => e.State == "Lease" && e.Expires > DateTime.UtcNow))
+                            if (network.Contains(AllocationSequence.Address(lease.Address)) && !result.Any(o => o.Source == "DhcpLease" && o.Address == AllocationSequence.Address(lease.Address).ToString() && o.ClientIdentifier == lease.Client))
+                                result.Add(new(AllocationSequence.Address(lease.Address).ToString(), "DhcpLease", replica.Scope, lease.Host, lease.Client, lease.Expires));
                 }
                 if (!string.IsNullOrEmpty(subnet.DnsZone))
                 {

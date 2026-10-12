@@ -98,6 +98,7 @@ namespace DnsServerCore.Dhcp
         //internal parameters
         const int OFFER_EXPIRY_SECONDS = 60; //1 mins offer expiry
         readonly ConcurrentDictionary<ClientIdentifierOption, Lease> _offers = new ConcurrentDictionary<ClientIdentifierOption, Lease>();
+        readonly ConcurrentDictionary<string, DateTime> _peerSelections = new();
         IPAddress _lastAddressOffered;
         readonly SemaphoreSlim _lastAddressOfferedLock = new SemaphoreSlim(1, 1);
         IPAddress _interfaceAddress;
@@ -948,13 +949,17 @@ namespace DnsServerCore.Dhcp
 
         internal async Task<Lease> GetOfferAsync(DhcpMessage request)
         {
+            if (_dhcpServer.Allocation?.ProtectedByOtherPlan(_name, AllocationSequence.Number(_startingAddress), AllocationSequence.Number(_endingAddress)) == true) return null;
             ClientIdentifierOption clientIdentifier = request.GetClientIdentifier(_ignoreClientIdentifierOption);
 
-            if (_dhcpServer.SecurityManager?.ObserveDhcp(_name, clientIdentifier.ToString(), BitConverter.ToString(request.ClientHardwareAddress), request.HostName?.HostName, _leases.TryGetValue(clientIdentifier, out Lease securityLease) && securityLease.LeaseExpires > DateTime.UtcNow) == true)
+            if (_dhcpServer.SecurityManager?.ObserveDhcp(_name, clientIdentifier.ToString(), BitConverter.ToString(request.ClientHardwareAddress), request.HostName?.HostName, _leases.TryGetValue(clientIdentifier, out Lease securityLease) && securityLease.LeaseExpires > DateTime.UtcNow || _dhcpServer.Allocation?.FindLease(_name, clientIdentifier.ToString()) is not null) == true)
             {
                 _log.Write("DHCP security policy withheld a new offer for scope '" + _name + "'.");
                 return null;
             }
+
+            if (_dhcpServer.Allocation?.Plan(_name) is not null)
+                return await GetDistributedOfferAsync(request, clientIdentifier);
 
             if (_leases.TryGetValue(clientIdentifier, out Lease existingLease))
             {
@@ -1099,9 +1104,168 @@ namespace DnsServerCore.Dhcp
             return _offers[clientIdentifier] = offerLease;
         }
 
+        public AllocationPlan BuildAllocationPlan(string epoch, string seed, string[] owners)
+        {
+            var excluded = (_exclusions ?? []).Select(e => new AllocationRange(AllocationSequence.Number(e.StartingAddress), AllocationSequence.Number(e.EndingAddress))).ToList();
+            foreach (var address in new[] { _networkAddress, _broadcastAddress, _routerAddress }.Where(a => a is not null))
+            { uint value = AllocationSequence.Number(address); excluded.Add(new(value, value)); }
+            var reservations = _reservedLeases.Values.Select(l => new AllocationReservation(AllocationSequence.Number(l.Address), l.ClientIdentifier.ToString())).OrderBy(r => r.Address).ToArray();
+            if (reservations.Length > 0 && !_ignoreClientIdentifierOption) throw new InvalidOperationException("Distributed reservations currently require hardware-based client identifiers.");
+            foreach (var reservation in reservations) excluded.Add(new(reservation.Address, reservation.Address));
+            return new(_name, epoch, AllocationSequence.Number(_startingAddress), AllocationSequence.Number(_endingAddress), seed, owners.Order(StringComparer.Ordinal).ToArray(), excluded.OrderBy(e => e.First).ThenBy(e => e.Last).ToArray(), AllocationSequence.Number(_subnetMask), reservations);
+        }
+        internal bool MatchesAllocationPlan(AllocationPlan plan)
+        { return System.Text.Json.JsonSerializer.Serialize(plan with { Configuration = null, HaGroups = null }, DistributedAllocation.JsonOptions) == System.Text.Json.JsonSerializer.Serialize(BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners), DistributedAllocation.JsonOptions); }
+        public int DistributedOfferDelayMilliseconds
+        {
+            get
+            {
+                var plan = _dhcpServer.Allocation?.Plan(_name); var groups = plan?.HaGroups ?? [];
+                for (int index = 0; index < groups.Length; index++)
+                {
+                    if (groups[index].Primary == _dhcpServer.Allocation.NodeName()) return index * 1500;
+                    if (groups[index].Secondary == _dhcpServer.Allocation.NodeName()) return index * 1500 + 500;
+                }
+                return groups.Length == 0 ? 0 : groups.Length * 1500;
+            }
+        }
+        public bool CanInitializeAllocation => !_enabled && _leases.Count == 0 && _offers.Count == 0;
+        internal async Task ApplySharedOptionsAsync(Scope source, AllocationPlan plan)
+        {
+            if (!source.MatchesAllocationPlan(plan)) throw new InvalidOperationException("Configuration changes allocation eligibility; fenced migration required.");
+            await _lastAddressOfferedLock.WaitAsync();
+            try
+            {
+                _leaseTimeDays = source._leaseTimeDays; _leaseTimeHours = source._leaseTimeHours; _leaseTimeMinutes = source._leaseTimeMinutes; _offerDelayTime = source._offerDelayTime;
+                _pingCheckEnabled = source._pingCheckEnabled; _pingCheckTimeout = source._pingCheckTimeout; _pingCheckRetries = source._pingCheckRetries;
+                _domainName = source._domainName; _domainSearchList = source._domainSearchList;
+                _dnsUpdates = source._dnsUpdates; _dnsOverwriteForDynamicLease = source._dnsOverwriteForDynamicLease; _dnsTtl = source._dnsTtl;
+                _serverAddress = source._serverAddress; _serverHostName = source._serverHostName; _bootFileName = source._bootFileName;
+                _routerAddress = source._routerAddress; _useThisDnsServer = source._useThisDnsServer; _dnsServers = source._dnsServers;
+                _winsServers = source._winsServers; _ntpServers = source._ntpServers; _ntpServerDomainNames = source._ntpServerDomainNames;
+                _staticRoutes = source._staticRoutes; _vendorInfo = source._vendorInfo; _capwapAcIpAddresses = source._capwapAcIpAddresses; _tftpServerAddreses = source._tftpServerAddreses; _genericOptions = source._genericOptions;
+                _allowOnlyReservedLeases = source._allowOnlyReservedLeases; _blockLocallyAdministeredMacAddresses = source._blockLocallyAdministeredMacAddresses; _ignoreClientIdentifierOption = source._ignoreClientIdentifierOption;
+                _exclusions = source._exclusions;
+                foreach (var reserved in source._reservedLeases) _reservedLeases[reserved.Key] = reserved.Value;
+                if (_useThisDnsServer) FindThisDnsServerAddress();
+                _lastModified = DateTime.UtcNow; // serving enablement and local interface selection remain local
+            }
+            finally { _lastAddressOfferedLock.Release(); }
+        }
+        internal bool CanRespondToDistributedRequest(IPAddress address)
+        {
+            var plan = _dhcpServer.Allocation?.Plan(_name);
+            return plan is null || MatchesAllocationPlan(plan) && _dhcpServer.Allocation.HasAuthority(_name, AllocationSequence.Number(address));
+        }
+        string TransactionKey(DhcpMessage request) => request.GetClientIdentifier(_ignoreClientIdentifierOption).ToString() + ":" + Convert.ToHexString(request.TransactionId);
+        bool PeerSelected(DhcpMessage request) => _peerSelections.TryGetValue(TransactionKey(request), out var until) && until > DateTime.UtcNow;
+        internal void ObservePeerSelection(DhcpMessage request)
+        {
+            if (_dhcpServer.Allocation?.Plan(_name) is null) return;
+            _peerSelections[TransactionKey(request)] = DateTime.UtcNow.AddSeconds(OFFER_EXPIRY_SECONDS);
+            foreach (var old in _peerSelections.Where(p => p.Value <= DateTime.UtcNow)) _peerSelections.TryRemove(old.Key, out _);
+            if (_peerSelections.Count > 4096) _peerSelections.TryRemove(_peerSelections.MinBy(p => p.Value).Key, out _);
+            var client = request.GetClientIdentifier(_ignoreClientIdentifierOption);
+            _offers.TryRemove(client, out _); _dhcpServer.Allocation.ReleaseOffer(_name, client.ToString());
+        }
+
+        async Task<Lease> GetDistributedOfferAsync(DhcpMessage request, ClientIdentifierOption clientIdentifier)
+        {
+            var store = _dhcpServer.Allocation; var plan = store.Plan(_name);
+            if (store.RecoveryRequired) return null;
+            if (PeerSelected(request)) return null;
+            if (!MatchesAllocationPlan(plan)) throw new InvalidOperationException("Scope differs from its immutable allocation plan; service withheld.");
+            if (!plan.Owners.Contains(store.NodeName())) return null;
+            string client = clientIdentifier.ToString();
+            await _lastAddressOfferedLock.WaitAsync();
+            try
+            {
+                var reserved = GetReservedLease(request);
+                if (reserved is null && _blockLocallyAdministeredMacAddresses && request.HardwareAddressType == DhcpMessageHardwareAddressType.Ethernet && (request.ClientHardwareAddress[0] & 2) != 0) return null;
+                var existing = store.FindLease(_name, client);
+                if (existing is not null) return Lease.Recover(existing, IsAddressReserved(AllocationSequence.Address(existing.Address)));
+                if (reserved is not null)
+                {
+                    if (!store.Hold(_name, AllocationSequence.Number(reserved.Address), client, BitConverter.ToString(request.ClientHardwareAddress), request.HostName?.HostName, DateTime.UtcNow.AddSeconds(OFFER_EXPIRY_SECONDS))) return null;
+                    return _offers[clientIdentifier] = new(LeaseType.Reserved, clientIdentifier, null, request.ClientHardwareAddress, reserved.Address, null, GetLeaseTime());
+                }
+                if (_allowOnlyReservedLeases || _blockLocallyAdministeredMacAddresses && request.HardwareAddressType == DhcpMessageHardwareAddressType.Ethernet && (request.ClientHardwareAddress[0] & 2) != 0) return null;
+                var recoveredOffer = store.FindOffer(_name, client);
+                if (recoveredOffer is not null)
+                {
+                    store.Hold(_name, recoveredOffer.Address, client, recoveredOffer.Hardware, recoveredOffer.Host, DateTime.UtcNow.AddSeconds(OFFER_EXPIRY_SECONDS));
+                    return _offers[clientIdentifier] = Lease.Recover(recoveredOffer, false);
+                }
+                var sequence = new AllocationSequence(plan);
+                async Task<Lease> TryAddress(uint candidate)
+                {
+                    if (!store.Available(_name, candidate, client)) return null;
+                    IPAddress address = AllocationSequence.Address(candidate);
+                    if (!(await IsAddressAvailableAsync(address)).IsAddressAvailable) return null;
+                    // Durability precedes the offer; ACKs persist the full lease lifetime separately.
+                    if (PeerSelected(request) || !store.Hold(_name, candidate, client, BitConverter.ToString(request.ClientHardwareAddress), request.HostName?.HostName, DateTime.UtcNow.AddSeconds(OFFER_EXPIRY_SECONDS))) return null;
+                    if (PeerSelected(request)) { store.ReleaseOffer(_name, client); return null; }
+                    return _offers[clientIdentifier] = new(LeaseType.Dynamic, clientIdentifier, null, request.ClientHardwareAddress, address, null, GetLeaseTime());
+                }
+                if (request.RequestedIpAddress is not null && sequence.Owner(AllocationSequence.Number(request.RequestedIpAddress.Address)) == store.NodeName())
+                { var preferred = await TryAddress(AllocationSequence.Number(request.RequestedIpAddress.Address)); if (preferred is not null) return preferred; }
+                foreach (uint candidate in sequence.Candidates(store.NodeName()))
+                { var selected = await TryAddress(candidate); if (selected is not null) return selected; }
+                // Own sequence is exhausted. Previously acknowledged grants remain valid offline.
+                foreach (uint granted in store.GrantedAddresses(_name))
+                { var selected = await TryAddress(granted); if (selected is not null) return selected; }
+                if (_dhcpServer.BorrowCapacity is not null)
+                {
+                    // Do not hold our scope mutex while asking another owner to lock its scope.
+                    _lastAddressOfferedLock.Release();
+                    byte[] donorState;
+                    try { donorState = await _dhcpServer.BorrowCapacity(_name, store.NodeName()); }
+                    finally { await _lastAddressOfferedLock.WaitAsync(); }
+                    if (donorState is not null)
+                    {
+                        store.Merge(donorState);
+                        foreach (uint granted in store.GrantedAddresses(_name))
+                        { var selected = await TryAddress(granted); if (selected is not null) return selected; }
+                    }
+                }
+                return null;
+            }
+            finally { _lastAddressOfferedLock.Release(); }
+        }
+        public async Task<byte[]> GrantCapacityAsync(string borrower, string requestId)
+        {
+            await _lastAddressOfferedLock.WaitAsync();
+            try
+            {
+                var store = _dhcpServer.Allocation; var plan = store?.Plan(_name);
+                if (plan is null || !MatchesAllocationPlan(plan)) throw new InvalidOperationException("Matching allocation plan is required.");
+                // Retrying a lost response must return the same permanent donor hold.
+                if (store.Snapshot().Replicas.Any(r => r.Scope == _name && r.Node == store.NodeName() && r.Entries.Any(e => e.State == "Grant" && e.GrantId == requestId && e.Borrower == borrower))) return store.Export();
+                foreach (uint address in new AllocationSequence(plan).Candidates(store.NodeName()))
+                    if (store.Available(_name, address) && (await IsAddressAvailableAsync(AllocationSequence.Address(address))).IsAddressAvailable)
+                    { store.Grant(_name, address, borrower, requestId); return store.Export(); }
+                return null;
+            }
+            finally { _lastAddressOfferedLock.Release(); }
+        }
+
         internal Lease GetExistingLeaseOrOffer(DhcpMessage request)
         {
+            if (_dhcpServer.Allocation?.ProtectedByOtherPlan(_name, AllocationSequence.Number(_startingAddress), AllocationSequence.Number(_endingAddress)) == true) return null;
             ClientIdentifierOption clientIdentifier = request.GetClientIdentifier(_ignoreClientIdentifierOption);
+
+            var allocation = _dhcpServer.Allocation;
+            var plan = allocation?.Plan(_name);
+            if (plan is not null)
+            {
+                if (!MatchesAllocationPlan(plan)) return null;
+                var recovered = allocation.FindLease(_name, clientIdentifier.ToString());
+                if (recovered is not null) return Lease.Recover(recovered, IsAddressReserved(AllocationSequence.Address(recovered.Address)));
+                var recoveredOffer = allocation.FindOffer(_name, clientIdentifier.ToString());
+                if (recoveredOffer is not null) return Lease.Recover(recoveredOffer, IsAddressReserved(AllocationSequence.Address(recoveredOffer.Address)));
+                if (_offers.TryGetValue(clientIdentifier, out var durableOffer) && durableOffer.Address is not null && allocation.HasLiveOffer(_name, AllocationSequence.Number(durableOffer.Address), clientIdentifier.ToString())) return durableOffer;
+                return null;
+            }
 
             //check for lease offer first since it may have a different IP address to offer
             if (_offers.TryGetValue(clientIdentifier, out Lease existingOffer))
@@ -1363,6 +1527,17 @@ namespace DnsServerCore.Dhcp
 
         internal void CommitLease(Lease lease)
         {
+            if (_dhcpServer.Allocation?.ProtectedByOtherPlan(_name, AllocationSequence.Number(_startingAddress), AllocationSequence.Number(_endingAddress)) == true) throw new InvalidOperationException("Scope overlaps distributed ownership.");
+            var plan = _dhcpServer.Allocation?.Plan(_name);
+            var authority = _dhcpServer.Allocation?.FindLease(_name, lease.ClientIdentifier.ToString());
+            bool existingLease = plan is null ? _leases.TryGetValue(lease.ClientIdentifier, out var prior) && prior.LeaseExpires > DateTime.UtcNow && prior.Address.Equals(lease.Address) : authority is not null && authority.Address == AllocationSequence.Number(lease.Address);
+            if (_dhcpServer.SecurityManager?.DenyDhcpCommit(_name, lease.ClientIdentifier.ToString(), BitConverter.ToString(lease.HardwareAddress), lease.HostName, existingLease) == true) throw new InvalidOperationException("Shared security policy withheld a new lease acknowledgement.");
+
+            if (plan is not null)
+            {
+                if (!MatchesAllocationPlan(plan)) throw new InvalidOperationException("Scope differs from its immutable allocation plan.");
+                _dhcpServer.Allocation.Commit(_name, AllocationSequence.Number(lease.Address), lease.ClientIdentifier.ToString(), BitConverter.ToString(lease.HardwareAddress), lease.HostName, DateTime.UtcNow.AddSeconds(GetLeaseTime()));
+            }
             lease.ExtendLease(GetLeaseTime());
 
             _leases[lease.ClientIdentifier] = lease;
@@ -1376,12 +1551,24 @@ namespace DnsServerCore.Dhcp
 
         internal void ReleaseLease(Lease lease)
         {
+            if (_dhcpServer.Allocation?.Plan(_name) is not null)
+                _dhcpServer.Allocation.Release(_name, AllocationSequence.Number(lease.Address), lease.ClientIdentifier.ToString());
             _leases.TryRemove(lease.ClientIdentifier, out _);
+            _offers.TryRemove(lease.ClientIdentifier, out _);
             _dhcpServer.SecurityManager?.DeviceContextChanged?.Invoke();
 
             _dhcpServer.RemoveDnsEntries(this, lease);
 
             _lastModified = DateTime.UtcNow;
+        }
+        internal void DeclineLease(Lease lease)
+        {
+            if (_dhcpServer.Allocation?.Plan(_name) is null) { ReleaseLease(lease); return; }
+            _dhcpServer.Allocation.Decline(_name, AllocationSequence.Number(lease.Address), lease.ClientIdentifier.ToString());
+            _leases.TryRemove(lease.ClientIdentifier, out _); _offers.TryRemove(lease.ClientIdentifier, out _);
+            _dhcpServer.SecurityManager?.DeviceContextChanged?.Invoke();
+            _dhcpServer.SecurityManager?.ObserveDhcpConflict(_name, lease.ClientIdentifier.ToString(), BitConverter.ToString(lease.HardwareAddress), lease.HostName, lease.Address.ToString());
+            _dhcpServer.RemoveDnsEntries(this, lease); _lastModified = DateTime.UtcNow;
         }
 
         internal void SetEnabled(bool enabled)
@@ -1606,7 +1793,7 @@ namespace DnsServerCore.Dhcp
             ConvertToDynamicLease(lease);
         }
 
-        public void WriteTo(Stream s)
+        public void WriteTo(Stream s, bool includeLeases = true, bool? enabled = null)
         {
             BinaryWriter bW = new BinaryWriter(s);
 
@@ -1614,7 +1801,7 @@ namespace DnsServerCore.Dhcp
             bW.Write((byte)10); //version
 
             s.WriteShortString(_name);
-            bW.Write(_enabled);
+            bW.Write(enabled ?? _enabled);
             _startingAddress.WriteTo(bW);
             _endingAddress.WriteTo(bW);
             _subnetMask.WriteTo(bW);
@@ -1802,19 +1989,18 @@ namespace DnsServerCore.Dhcp
                 }
             }
 
-            bW.Write(_reservedLeases.Count);
-
-            foreach (KeyValuePair<ClientIdentifierOption, Lease> reservedLease in _reservedLeases)
-                reservedLease.Value.WriteTo(bW);
+            var reservations = _reservedLeases.Values.OrderBy(l => l.ClientIdentifier.ToString(), StringComparer.Ordinal).ToArray();
+            bW.Write(reservations.Length);
+            foreach (var reservedLease in reservations) reservedLease.WriteTo(bW);
 
             bW.Write(_allowOnlyReservedLeases);
             bW.Write(_blockLocallyAdministeredMacAddresses);
             bW.Write(_ignoreClientIdentifierOption);
 
             {
-                bW.Write(_leases.Count);
+                bW.Write(includeLeases ? _leases.Count : 0);
 
-                foreach (KeyValuePair<ClientIdentifierOption, Lease> lease in _leases)
+                if (includeLeases) foreach (KeyValuePair<ClientIdentifierOption, Lease> lease in _leases)
                     lease.Value.WriteTo(bW);
             }
         }

@@ -16,6 +16,7 @@ function refreshIpam() {
     ipamRequest("list", "GET", {}, function (response) {
         ipamInventory = response.response.inventory;
         var permissions = sessionData.info.permissions.Settings;
+        $("#ddiNetBoxPanel").toggle(sessionData.info.permissions.Administration.canModify && permissions.canModify);
         $(".ipam-edit").toggle(permissions.canModify);
         $("#ipamRevision").text("Inventory revision " + ipamInventory.revision);
         ipamOptions("#ipamView", ipamInventory.views, function (v) { return v.name; });

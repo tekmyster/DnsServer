@@ -541,6 +541,22 @@ namespace DnsServerCore.HttpApi
             CheckResponseStatus(json.RootElement);
         }
 
+        public async Task<byte[]?> AllocationRequestAsync(string path, IReadOnlyDictionary<string, string>? values = null, CancellationToken cancellationToken = default)
+        {
+            if (!_loggedIn || _serverUrl.Scheme != "https") throw new HttpApiClientException("Allocation replication requires an active HTTPS cluster session.");
+            using HttpRequestMessage request = new(values is null ? HttpMethod.Get : HttpMethod.Post, path);
+            if (values is not null) request.Content = new FormUrlEncodedContent(values);
+            using HttpResponseMessage response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using MemoryStream bytes = new(); byte[] buffer = new byte[8192]; int count;
+            while ((count = await stream.ReadAsync(buffer, cancellationToken)) > 0)
+            { if (bytes.Length + count > 8 * 1024 * 1024) throw new HttpApiClientException("Allocation response exceeds 8 MiB."); await bytes.WriteAsync(buffer.AsMemory(0, count), cancellationToken); }
+            using JsonDocument json = JsonDocument.Parse(bytes.ToArray()); CheckResponseStatus(json.RootElement);
+            var state = json.RootElement.GetProperty("response").GetProperty("state");
+            return state.ValueKind == JsonValueKind.Null ? null : Encoding.UTF8.GetBytes(state.GetRawText());
+        }
+
         public async Task ProxyRequest(HttpContext context, string actingUsername, CancellationToken cancellationToken = default)
         {
             if (!_loggedIn)

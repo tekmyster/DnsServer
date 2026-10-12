@@ -81,6 +81,9 @@ static class ApiChecks
             Check(freshInventory.GetProperty("response").GetProperty("inventory").GetProperty("revision").GetInt64() == 3, "Fresh session cannot read intended state");
             var freshWrite = await Call(fresh, "/api/ipam/views/set", ("revision", "3"), ("name", "Fresh session validated"));
             Check(freshWrite.GetProperty("status").GetString() == "ok", "Fresh session lacks administrative modify privilege");
+            Check((await Call(fresh, "/api/ddi/dhcp/state/get")).GetProperty("response").GetProperty("state").GetProperty("plans").GetArrayLength() == 0, "Unexpected distributed DHCP bootstrap state");
+            Check((await Call(fresh, "/api/ddi/dhcp/prepare", ("state", "{}"))).GetProperty("status").GetString() == "error", "Ordinary admin session can prepare cluster ownership");
+            Check((await Call(fresh, "/api/ipam/netbox/settings/get")).GetProperty("response").GetProperty("settings").GetProperty("enabled").GetBoolean() == false, "NetBox integration does not default disabled");
             var dhcpSubnet = await Call(original, "/api/ipam/subnets/set", ("revision", "4"), ("prefix", "192.168.1.0/24"), ("name", "DHCP lab"), ("dhcpScope", "Default"));
             Check(dhcpSubnet.GetProperty("status").GetString() == "ok", "DHCP scope linkage failed: " + dhcpSubnet);
             string dhcpSubnetId = dhcpSubnet.GetProperty("response").GetProperty("subnet").GetProperty("id").GetString();
@@ -172,7 +175,7 @@ static class ApiChecks
             using (var archive = new System.IO.Compression.ZipArchive(new MemoryStream(await securityBackup.Content.ReadAsByteArrayAsync())))
                 Check(archive.GetEntry("security.json") is not null && archive.GetEntry("security-signals.json") is not null && archive.GetEntry("security-misp.json") is not null, "Shared security state omitted from configuration transfer format");
             Check((await Call(fresh, "/api/security/policy/get")).GetProperty("status").GetString() == "ok", "Fresh administrative security access failed");
-            var protectedPolicy = securityPolicy with { Indicators = securityPolicy.Indicators.Append(new ThreatIndicator("inventory-ioc", "Network", "192.0.2.10", "Monitor", "Inventory lab")).ToArray() };
+            var protectedPolicy = securityPolicy with { Misp = new MispSettings(false, "https://configured.example/"), Indicators = securityPolicy.Indicators.Append(new ThreatIndicator("inventory-ioc", "Network", "192.0.2.10", "Monitor", "Inventory lab")).ToArray() };
             Check((await Call(original, "/api/security/policy/set", ("revision", "2"), ("policy", SerializePolicy(protectedPolicy)))).GetProperty("status").GetString() == "ok", "Inventory security policy setup failed");
             var inventoryThreats = await Call(original, "/api/ipam/subnets/inspect", ("subnetId", subnetId));
             Check(inventoryThreats.GetProperty("response").GetProperty("securityFindings").GetArrayLength() > 0, "IPAM is unaware of shared threat intelligence");
@@ -182,10 +185,18 @@ static class ApiChecks
             Check(dnsLogin.GetProperty("status").GetString() == "ok", "Fresh session after role change failed");
             dnsAdmin.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", dnsLogin.GetProperty("token").GetString());
             Check((await Call(dnsAdmin, "/api/security/policy/get")).GetProperty("status").GetString() == "ok", "Fresh DNS admin session lacks intended view privilege");
+            Check((await Call(dnsAdmin, "/api/ipam/netbox/settings/get")).GetProperty("status").GetString() == "error", "DNS-only administrator can access NetBox integration controls");
             Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "3"), ("policy", SerializePolicy(protectedPolicy)))).GetProperty("status").GetString() == "ok", "Fresh DNS admin session lacks intended policy modify privilege");
             var unauthorizedSource = protectedPolicy with { Misp = new MispSettings(false, "https://unapproved.example/") };
             Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "4"), ("policy", SerializePolicy(unauthorizedSource)))).GetProperty("status").GetString() == "error", "DNS-only admin can redirect MISP credential use");
             Check((await Call(fresh, "/api/security/policy/get")).GetProperty("response").GetProperty("policy").GetProperty("revision").GetInt64() == 4, "Denied source change mutated policy or fresh administrative access was lost");
+            Check((await Call(fresh, "/api/security/policy/history")).GetProperty("response").GetProperty("policies").GetArrayLength() > 1, "Policy history API lacks prior revisions");
+            Check((await Call(dnsAdmin, "/api/security/policy/rollback", ("revision", "4"), ("targetRevision", "1"))).GetProperty("status").GetString() == "error", "Rollback bypasses MISP configuration permission");
+            Check((await Call(fresh, "/api/security/policy/rollback", ("revision", "4"), ("targetRevision", "4"))).GetProperty("response").GetProperty("policy").GetProperty("revision").GetInt64() == 5, "Rollback does not publish a new policy revision");
+            var investigation = await Call(fresh, "/api/security/events/search", ("from", DateTime.UtcNow.AddMinutes(-10).ToString("O")), ("to", DateTime.UtcNow.AddMinutes(1).ToString("O")));
+            var investigatedEvents = investigation.GetProperty("response").GetProperty("search").GetProperty("events");
+            Check(investigatedEvents.GetArrayLength() > 0, "Investigation search API lacks events");
+            Check((await Call(fresh, "/api/security/dispositions/set", ("eventId", investigatedEvents[0].GetProperty("id").GetString()), ("status", "Investigating"), ("notes", "Isolated test"))).GetProperty("status").GetString() == "ok", "Analyst disposition API failed");
             Console.WriteLine($"PASS: {checks} authenticated IPAM/security API and live DNS/DHCP-hook checks; loopback fresh administrative read and modify verified.");
             if (serve)
             {

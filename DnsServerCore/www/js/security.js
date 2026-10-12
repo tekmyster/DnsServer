@@ -90,5 +90,34 @@ function simulateSecurity() {
         var evidence = $('<ul>');
         decision.matches.forEach(function (match) { evidence.append($('<li>').text(match.kind + ': ' + match.value + ' — source ' + match.source + ' — confidence ' + match.confidence)); });
         output.append(evidence);
+        if (decision.additionalMatches) output.append($('<p>').text(decision.additionalMatches + ' additional matches omitted from the bounded evidence sample.'));
     });
+}
+var securityTimelineResult = null;
+function securitySearchTimeline() {
+    var now = new Date(), from = $('#securitySearchFrom').val() || new Date(now.getTime() - 3600000).toISOString(), to = $('#securitySearchTo').val() || now.toISOString();
+    securityRequest('events/search', 'GET', { from: from, to: to, client: $('#securitySearchClient').val(), query: $('#securitySearchQuery').val(), limit: 200 }, function (response) {
+        securityTimelineResult = response.response.search; var output = $('#securityTimeline').empty(), list = $('<ul>');
+        output.append($('<p>').text(securityTimelineResult.events.length + ' events; ' + securityTimelineResult.scanned + ' persisted lines scanned; ' + securityTimelineResult.corruptLines + ' unreadable lines; ' + (securityTimelineResult.truncated ? 'partial coverage — narrow the search interval.' : 'search bounds were not reached.')));
+        securityTimelineResult.events.forEach(function (e) { list.append($('<li>').text(e.timestamp + ' — ' + e.service + ' — ' + e.action + ' — ' + (e.query || e.clientAddress || '') + ' — ID ' + e.id + ' — ' + e.reason)); }); output.append(list);
+        securityLoadDispositions();
+    });
+}
+function securityExportTimeline() {
+    if (!securityTimelineResult) return;
+    var url = URL.createObjectURL(new Blob([JSON.stringify(securityTimelineResult, null, 2)], { type: 'application/json' }));
+    var link = document.createElement('a'); link.href = url; link.download = 'ddi-security-search.json'; link.click(); URL.revokeObjectURL(url);
+}
+function securityLoadDispositions() {
+    securityRequest('dispositions/list', 'GET', {}, function (response) { var list = $('#securityDispositions').empty(); response.response.dispositions.forEach(function (d) { list.append($('<li>').text(d.eventId + ' — ' + d.status + ' — ' + d.actor + ' — ' + d.notes)); }); });
+}
+function securitySetDisposition() {
+    securityRequest('dispositions/set', 'POST', { eventId: $('#securityDispositionId').val(), status: $('#securityDispositionStatus').val(), notes: $('#securityDispositionNotes').val() }, securityLoadDispositions);
+}
+function securityLoadHistory() {
+    securityRequest('policy/history', 'GET', {}, function (response) { var list = $('#securityPolicyHistory').empty(); response.response.policies.forEach(function (p) { list.append($('<li>').text('Revision ' + p.revision + ': ' + (p.enabled ? 'enabled' : 'disabled') + ', ' + p.mode + ', ' + p.indicators + ' local indicators')); }); });
+}
+function securityRollback() {
+    if (!ddiSecurityPolicy) return;
+    securityRequest('policy/rollback', 'POST', { revision: ddiSecurityPolicy.revision, targetRevision: $('#securityRollbackRevision').val() }, function () { refreshSecurity(); securityLoadHistory(); });
 }

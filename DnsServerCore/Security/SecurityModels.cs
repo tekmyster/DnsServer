@@ -11,8 +11,8 @@ namespace DnsServerCore.Security
     public sealed record SecurityDevice(string Scope, string ClientIdentifier, string HardwareAddress, string HostName, string ViewId, string Site, int? Vlan);
     public sealed record ScoreContribution(string Feature, int Points, string Evidence);
     public sealed record BehavioralScore(int Score, string Domain, int Samples, DateTime WindowStart, ScoreContribution[] Contributions, string ModelVersion = "heuristic-v1", string Confidence = "Uncalibrated");
-    public sealed record SecurityDecision(string Action, ThreatIndicator[] Matches, BehavioralScore Behavior, string Reason);
-    public sealed record SecurityEvent(string Id, DateTime Timestamp, string Node, string Service, string ClientAddress, string Query, string QueryType, string ResponseCode, string Action, long PolicyRevision, SecurityDevice Device, ThreatIndicator[] Matches, BehavioralScore Behavior, string Reason);
+    public sealed record SecurityDecision(string Action, ThreatIndicator[] Matches, BehavioralScore Behavior, string Reason, int AdditionalMatches = 0);
+    public sealed record SecurityEvent(string Id, DateTime Timestamp, string Node, string Service, string ClientAddress, string Query, string QueryType, string ResponseCode, string Action, long PolicyRevision, SecurityDevice Device, ThreatIndicator[] Matches, BehavioralScore Behavior, string Reason, int AdditionalMatches = 0);
     public sealed record SecuritySignal(string Id, DateTime Timestamp, DateTime Expires, string Node, string Service, string Scope, string ClientIdentifier, string HardwareAddress, int Score, string Reason, string[] EvidenceKeys = null);
     public sealed record MispHealth(DateTime? LastSuccess, DateTime? LastAttempt, string Status, int Indicators);
     public sealed record MispCache(string SourceUrl, ThreatIndicator[] Indicators);

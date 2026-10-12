@@ -52,6 +52,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <script src="js/dhcp.js"></script>
     <script src="js/ipam.js"></script>
     <script src="js/security.js"></script>
+    <script src="js/ddi.js"></script>
     <script src="js/logs.js"></script>
 </head>
 <body>
@@ -2553,6 +2554,28 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                     <pre id="securityEvidence"></pre>
                                     <h4>Shared device signals</h4>
                                     <div class="table-responsive"><table class="table table-striped"><thead><tr><th>Source node</th><th>Source service</th><th>DHCP scope</th><th>Hardware address</th><th>Risk priority</th><th>Expiry</th><th>Reason</th></tr></thead><tbody id="securitySignalsBody"></tbody></table></div>
+                                    <h4>Investigations</h4>
+                                    <form class="form-inline" onsubmit="securitySearchTimeline(); return false;">
+                                        <label>From UTC <input id="securitySearchFrom" class="form-control" placeholder="2026-10-12T12:00:00Z" /></label>
+                                        <label>To UTC <input id="securitySearchTo" class="form-control" placeholder="2026-10-12T13:00:00Z" /></label>
+                                        <label>Client or hardware identifier <input id="securitySearchClient" class="form-control" /></label>
+                                        <label>Domain contains <input id="securitySearchQuery" class="form-control" /></label>
+                                        <button class="btn btn-default" type="submit">Search timeline</button>
+                                    </form>
+                                    <div id="securityTimeline"></div><button class="btn btn-default" onclick="securityExportTimeline();">Export search JSON</button>
+                                    <form class="security-edit form-inline" onsubmit="securitySetDisposition(); return false;">
+                                        <label>Event ID <input id="securityDispositionId" class="form-control" required /></label>
+                                        <label>Status <select id="securityDispositionStatus" class="form-control"><option>Investigating</option><option>Confirmed</option><option>FalsePositive</option><option>Resolved</option></select></label>
+                                        <label>Notes <input id="securityDispositionNotes" class="form-control" maxlength="2048" /></label>
+                                        <button class="btn btn-primary" type="submit">Record analyst disposition</button>
+                                    </form><ul id="securityDispositions"></ul>
+                                    <div class="security-edit">
+                                        <h4>Policy history and rollback</h4><button class="btn btn-default" onclick="securityLoadHistory();">Load retained revisions</button><ul id="securityPolicyHistory"></ul>
+                                        <form class="form-inline" onsubmit="securityRollback(); return false;">
+                                            <label>Target revision <input id="securityRollbackRevision" class="form-control" type="number" min="0" required /></label>
+                                            <button class="btn btn-primary" type="submit">Publish previous content as a new revision</button>
+                                        </form>
+                                    </div>
                                 </div>
                                 <div id="mainPanelTabPaneIpam" role="tabpanel" class="tab-pane" style="padding: 15px 0;">
                                     <h3>IP address management</h3>
@@ -2613,8 +2636,44 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                     <div class="form-inline"><label for="ipamInspectSubnet">Subnet</label> <select id="ipamInspectSubnet" class="form-control"></select> <button class="btn btn-default" onclick="inspectIpam();">Inspect linked services</button></div>
                                     <div id="ipamInspection" style="margin-top: 15px;"></div>
                                     <h4>Recent changes</h4><ul id="ipamHistory"></ul>
+                                    <div id="ddiNetBoxPanel" style="display:none; margin-top:20px;">
+                                        <h4>NetBox publication</h4>
+                                        <p>DDI owns mapped prefixes and addresses. Unowned NetBox objects are reported as conflicts. Review a preview before publication.</p>
+                                        <button class="btn btn-default" onclick="ddiLoadNetBox();">Load settings</button>
+                                        <form onsubmit="ddiSaveNetBox(); return false;">
+                                            <label><input id="ddiNetBoxEnabled" type="checkbox" /> Enable NetBox publication</label>
+                                            <label for="ddiNetBoxUrl">NetBox HTTPS URL</label><input id="ddiNetBoxUrl" class="form-control" type="url" placeholder="https://netbox.example/" />
+                                            <label for="ddiNetBoxCredential">API key environment variable</label><input id="ddiNetBoxCredential" class="form-control" value="DDI_NETBOX_API_KEY" />
+                                            <label for="ddiNetBoxScheme">Token type</label><select id="ddiNetBoxScheme" class="form-control"><option value="Bearer">Bearer (v2)</option><option value="Token">Token (legacy v1)</option></select>
+                                            <p>The key remains on the server. Select the network views to publish and their existing NetBox VRFs; leave the VRF blank for the global table.</p>
+                                            <div class="table-responsive"><table class="table"><thead><tr><th>Publish</th><th>Network view</th><th>NetBox VRF ID</th></tr></thead><tbody id="ddiNetBoxMappings"></tbody></table></div>
+                                            <button id="ddiNetBoxSave" class="btn btn-primary" type="submit" disabled>Save settings</button>
+                                        </form>
+                                        <button class="btn btn-default" onclick="ddiPreviewNetBox();">Preview publication</button>
+                                        <div id="ddiNetBoxPreview"></div>
+                                        <button id="ddiNetBoxApply" class="btn btn-primary" onclick="ddiApplyNetBox();" disabled>Publish reviewed changes</button>
+                                    </div>
                                 </div>
                                 <div id="mainPanelTabPaneDhcp" role="tabpanel" class="tab-pane" style="padding: 10px 0 0 0;">
+                                    <details style="margin-bottom:15px;"><summary onclick="ddiRefreshDhcp();">Distributed DHCP ownership and synchronization</summary>
+                                        <p>Owners use balanced scattered sequences. All enrolled nodes receive allocation state. Overflow requires an acknowledged donor hold.</p>
+                                        <button class="btn btn-default" onclick="ddiRefreshDhcp();">Refresh distributed state</button>
+                                        <p id="ddiDhcpHealth"></p><div id="ddiDhcpState"></div>
+                                        <form id="ddiDhcpBootstrap" class="form-inline" onsubmit="ddiBootstrapDhcp(); return false;">
+                                            <p>Bootstrap requires disabled, drained scopes. Enable serving scopes after every node acknowledges the plan. Ownership changes require a future fenced migration workflow.</p>
+                                            <label>Scope <input id="ddiDhcpScope" class="form-control" required /></label>
+                                            <label>Owner node names <input id="ddiDhcpOwners" class="form-control" required placeholder="east-a.example,east-b.example,west-a.example" /></label>
+                                            <p>Optional HA pairs: add the local pair first, then regional recovery pairs.</p>
+                                            <div class="table-responsive"><table class="table"><thead><tr><th>Group</th><th>Region</th><th>Primary</th><th>Secondary</th><th></th></tr></thead><tbody id="ddiDhcpGroupRows"></tbody></table></div>
+                                            <button id="ddiDhcpAddGroup" class="btn btn-default" type="button" onclick="ddiAddHaGroup();">Add HA pair</button>
+                                            <button class="btn btn-primary" type="submit">Install ownership plan</button>
+                                        </form>
+                                        <form class="form-inline" onsubmit="ddiLookupHistory(); return false;">
+                                            <label>Historical address <input id="ddiHistoryAddress" class="form-control" required /></label>
+                                            <label>UTC timestamp <input id="ddiHistoryTime" class="form-control" required placeholder="2026-10-12T12:00:00Z" /></label>
+                                            <button class="btn btn-default" type="submit">Find observed lease owner</button>
+                                        </form><div id="ddiHistoryResult"></div>
+                                    </details>
 
                                     <ul class="nav nav-tabs" role="tablist">
                                         <li id="dhcpTabListLeases" role="presentation" class="active"><a href="#dhcpTabPaneLeases" aria-controls="dhcpTabPaneLeases" role="tab" data-toggle="tab" onclick="refreshDhcpLeases();">Leases</a></li>

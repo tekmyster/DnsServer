@@ -605,6 +605,14 @@ namespace DnsServerCore.Cluster
             if (_type != ClusterNodeType.Primary) throw new InvalidOperationException("Security signals must go to the cluster primary.");
             return GetApiClient().PushSecuritySignalsAsync(signals, cancellationToken);
         }
+        public Task<byte[]> GetAllocationStateAsync(CancellationToken cancellationToken = default)
+            => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/state/get", cancellationToken: cancellationToken);
+        public async Task PrepareAllocationAsync(string state, CancellationToken cancellationToken = default)
+            => await GetApiClient().AllocationRequestAsync("api/ddi/dhcp/prepare", new Dictionary<string, string> { ["state"] = state }, cancellationToken);
+        public async Task PushAllocationStateAsync(string state, CancellationToken cancellationToken = default)
+            => await GetApiClient().AllocationRequestAsync("api/ddi/dhcp/state/ingest", new Dictionary<string, string> { ["state"] = state }, cancellationToken);
+        public Task<byte[]> GrantAllocationAsync(string scope, string borrower, string requestId, CancellationToken cancellationToken = default)
+            => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/grant", new Dictionary<string, string> { ["scope"] = scope, ["borrower"] = borrower, ["requestId"] = requestId }, cancellationToken);
 
         public async Task AskSecondaryNodeToLeaveClusterAsync(CancellationToken cancellationToken = default)
         {

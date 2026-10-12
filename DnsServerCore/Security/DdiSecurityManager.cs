@@ -19,7 +19,7 @@ using TechnitiumLibrary.Net.Dns.ResourceRecords;
 
 namespace DnsServerCore.Security
 {
-    public sealed class DdiSecurityManager : IAsyncDisposable
+    public sealed partial class DdiSecurityManager : IAsyncDisposable
     {
         sealed record Rule(ThreatIndicator Indicator, IpamNetwork Client);
         sealed class Index
@@ -160,7 +160,7 @@ namespace DnsServerCore.Security
             lock (_persistence)
             {
                 ThreatIndicator[] enrichment; lock (_sync) enrichment = EnrichmentFor(policy).ToArray();
-                Index index = new(policy.Indicators.Concat(enrichment)); Save("security.json", policy);
+                Index index = new(policy.Indicators.Concat(enrichment)); SavePolicyHistory(policy); Save("security.json", policy);
                 lock (_sync) { _policy = policy; _index = index; }
             }
         }
@@ -176,7 +176,7 @@ namespace DnsServerCore.Security
                     enrichment = EnrichmentFor(policy).ToArray();
                 }
                 policy = policy with { Revision = checked(expectedRevision + 1) };
-                Index index = new(policy.Indicators.Concat(enrichment)); Save("security.json", policy);
+                Index index = new(policy.Indicators.Concat(enrichment)); SavePolicyHistory(policy); Save("security.json", policy);
                 lock (_sync) { _policy = policy; _index = index; }
             }
         }
@@ -224,12 +224,16 @@ namespace DnsServerCore.Security
             if (!policy.Enabled) return new("Allow", [], behavior, "Security module disabled.");
             DateTime now = DateTime.UtcNow;
             ThreatIndicator[] queryMatches = string.IsNullOrEmpty(query) ? [] : index.Domain(PublicSuffixes.Normalize(query), client, now).ToArray();
-            if (queryMatches.Any(m => m.Action == "Allow")) return new("Allow", queryMatches, behavior, "Explicit query exception for this module; other blocking systems still apply.");
+            if (queryMatches.Any(m => m.Action == "Allow"))
+            {
+                var exceptions = queryMatches.Where(m => m.Action == "Allow").ToArray();
+                return new("Allow", exceptions.Take(32).ToArray(), behavior, "Explicit query exception for this module; other blocking systems still apply.", Math.Max(0, exceptions.Length - 32));
+            }
             static IEnumerable<ThreatIndicator> Target(IEnumerable<ThreatIndicator> values) { var entries = values.ToArray(); return entries.Any(i => i.Action == "Allow") ? entries.Where(i => i.Action == "Allow") : entries; }
             ThreatIndicator[] matches = queryMatches.Concat(cnames.SelectMany(n => Target(index.Domain(PublicSuffixes.Normalize(n), client, now)))).Concat(addresses.SelectMany(a => Target(index.Address(a, client, now)))).DistinctBy(i => i.Id + "|" + i.Source).ToArray();
             // Target-specific allow rules suppress only that target's matching evidence.
             bool deny = matches.Any(m => m.Action == "Block");
-            return new(deny && policy.Mode == "Block" ? "Block" : matches.Length > 0 || behavior?.Score >= policy.AlertThreshold ? "Monitor" : "Allow", matches, behavior, deny ? "Threat indicator matched." : behavior?.Score >= policy.AlertThreshold ? "Behavioral risk threshold reached; score is uncalibrated." : matches.Length > 0 ? "Threat enrichment matched." : "No configured threat match.");
+            return new(deny && policy.Mode == "Block" ? "Block" : matches.Length > 0 || behavior?.Score >= policy.AlertThreshold ? "Monitor" : "Allow", matches.OrderByDescending(m => m.Action == "Block").ThenByDescending(m => m.Confidence).Take(32).ToArray(), behavior, deny ? "Threat indicator matched." : behavior?.Score >= policy.AlertThreshold ? "Behavioral risk threshold reached; score is uncalibrated." : matches.Length > 0 ? "Threat enrichment matched." : "No configured threat match.", Math.Max(0, matches.Length - 32));
         }
 
         public DnsDatagram BlockResponse(DnsDatagram request, bool recursionAvailable, string reason)
@@ -279,7 +283,7 @@ namespace DnsServerCore.Security
             else if (signal is not null && decision.Action == "Allow" && !queryException) decision = decision with { Action = "Monitor", Reason = "Related device security evidence: " + signal.Reason };
             if (decision.Matches.Length > 0 || behavior?.Score >= policy.AlertThreshold || signal is not null)
             {
-                SecurityEvent item = new(Guid.NewGuid().ToString("N"), DateTime.UtcNow, NodeName(), "DNS", client.Address.ToString(), query, request.Question[0].Type.ToString(), decision.Action == "Block" ? DnsResponseCode.Refused.ToString() : response.RCODE.ToString(), decision.Action, policy.Revision, device, decision.Matches, behavior, decision.Reason);
+                SecurityEvent item = new(Guid.NewGuid().ToString("N"), DateTime.UtcNow, NodeName(), "DNS", client.Address.ToString(), query, request.Question[0].Type.ToString(), decision.Action == "Block" ? DnsResponseCode.Refused.ToString() : response.RCODE.ToString(), decision.Action, policy.Revision, device, decision.Matches, behavior, decision.Reason, decision.AdditionalMatches);
                 Record(item);
                 int reputation = decision.Matches.Where(i => i.Action != "Allow").Select(i => i.Confidence).DefaultIfEmpty(0).Max();
                 int risk = decision.Matches.Any(i => i.Action == "Block") ? 100 : Math.Max(reputation, behavior?.Score ?? 0);
@@ -381,6 +385,22 @@ namespace DnsServerCore.Security
             if (anomaly || risk is not null) Record(new(Guid.NewGuid().ToString("N"), now, NodeName(), "DHCP", "", "", "Offer", "", deny ? "DenyNewLease" : "Monitor", policy.Revision, device, [], null, risk?.Reason ?? "DHCP request-rate anomaly."));
             return deny;
         }
+        public void ObserveDhcpConflict(string scope, string clientIdentifier, string hardwareAddress, string hostName, string address)
+        {
+            SecurityPolicy policy = ReadPolicy(); if (!policy.Enabled) return;
+            var device = new SecurityDevice(scope, clientIdentifier, hardwareAddress, hostName, "", "", null);
+            string reason = "Client reports an address conflict for " + address + "; unverified DHCP observation.";
+            PublishDeviceSignal("DHCP", device, 80, reason);
+            Record(new(Guid.NewGuid().ToString("N"), DateTime.UtcNow, NodeName(), "DHCP", address, "", "Decline", "", "Monitor", policy.Revision, device, [], null, reason));
+        }
+        public bool DenyDhcpCommit(string scope, string clientIdentifier, string hardwareAddress, string hostName, bool existingLease)
+        {
+            var policy = ReadPolicy();
+            if (!policy.Enabled || existingLease || policy.Mode != "Block" || policy.DhcpResponse != "DenyNewLeases") return false;
+            var signal = DeviceSignal(scope, clientIdentifier, hardwareAddress, policy.DeviceThreshold); if (signal is null) return false;
+            var device = new SecurityDevice(scope, clientIdentifier, hardwareAddress, hostName, "", "", null);
+            Record(new(Guid.NewGuid().ToString("N"), DateTime.UtcNow, NodeName(), "DHCP", "", "", "Request", "", "DenyNewLease", policy.Revision, device, [], null, signal.Reason)); return true;
+        }
 
         async Task WorkerAsync()
         {
@@ -395,8 +415,9 @@ namespace DnsServerCore.Security
                         try
                         {
                             string file = Path.Combine(_folder, "security-events-" + now.ToString("yyyyMMdd") + ".jsonl");
-                            if (File.Exists(file) && new FileInfo(file).Length >= 10 * 1024 * 1024) { Interlocked.Increment(ref _dropped); continue; }
-                            await File.AppendAllTextAsync(file, JsonSerializer.Serialize(item, JsonOptions) + "\n", _stop.Token);
+                            string line = JsonSerializer.Serialize(item, JsonOptions) + "\n";
+                            if ((File.Exists(file) ? new FileInfo(file).Length : 0) + Encoding.UTF8.GetByteCount(line) > 10 * 1024 * 1024) { Interlocked.Increment(ref _dropped); continue; }
+                            await File.AppendAllTextAsync(file, line, _stop.Token);
                         }
                         catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { Interlocked.Increment(ref _dropped); }
                     }

@@ -66,6 +66,8 @@ namespace DnsServerCore.Dhcp
 
         readonly string _scopesFolder;
         public Security.DdiSecurityManager SecurityManager { get; set; }
+        public DistributedAllocation Allocation { get; set; }
+        public Func<string, string, Task<byte[]>> BorrowCapacity { get; set; }
         readonly LogManager _log;
 
         readonly ConcurrentDictionary<IPAddress, UdpListener> _udpListeners = new ConcurrentDictionary<IPAddress, UdpListener>();
@@ -337,8 +339,9 @@ namespace DnsServerCore.Dhcp
                         if ((request.BootFileName != null) && (request.BootFileName != scope.BootFileName))
                             return null; //discard request; since this request wants boot file not available on this server
 
-                        if (scope.OfferDelayTime > 0)
-                            await Task.Delay(scope.OfferDelayTime); //delay sending offer
+                        int offerDelay = scope.OfferDelayTime + scope.DistributedOfferDelayMilliseconds;
+                        if (offerDelay > 0)
+                            await Task.Delay(offerDelay); //local primary, local secondary, then regional recovery preference
 
                         Lease offer = await scope.GetOfferAsync(request);
                         if (offer == null)
@@ -371,6 +374,14 @@ namespace DnsServerCore.Dhcp
                         Scope scope = FindScope(request, remoteEP.Address, ipPacketInformation);
                         if (scope == null)
                             return null; //no scope available; do nothing
+
+                        if (request.ServerIdentifier is not null)
+                        {
+                            IPAddress selectedServer = scope.InterfaceAddress.Equals(IPAddress.Any) ? ipPacketInformation.Address : scope.InterfaceAddress;
+                            if (!request.ServerIdentifier.Address.Equals(selectedServer)) { if (request.RequestedIpAddress is not null) scope.ObservePeerSelection(request); return null; }
+                        }
+                        // Other sequence owners must remain silent rather than NAK a valid peer lease.
+                        if (!scope.CanRespondToDistributedRequest(request.RequestedIpAddress?.Address ?? request.ClientIpAddress)) return null;
 
                         IPAddress serverIdentifierAddress = scope.InterfaceAddress.Equals(IPAddress.Any) ? ipPacketInformation.Address : scope.InterfaceAddress;
 
@@ -562,7 +573,7 @@ namespace DnsServerCore.Dhcp
                             return null; //the client's notion of its IP address is not correct; do nothing
 
                         //remove lease since the IP address is used by someone else
-                        scope.ReleaseLease(lease);
+                        scope.DeclineLease(lease);
 
                         //log issue
                         _log.Write(remoteEP, "DHCP Server received DECLINE message for scope '" + scope.Name + "': " + lease.GetClientInfo() + " detected that IP address [" + lease.Address + "] is already in use.");

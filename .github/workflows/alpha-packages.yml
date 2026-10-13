@@ -91,7 +91,7 @@ jobs:
           $installed=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DnsPort=15353','/ConsolePort=15380',"/LOG=`"$env:RUNNER_TEMP/tectanium-setup.log`"") -WindowStyle Hidden -Wait -PassThru
           if ($installed.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP/tectanium-setup.log" -Tail 50; throw 'Setup installation failed.' }
           python packaging/check-service.py http://127.0.0.1:15380/ "$env:ProgramData/Tectanium DDI Server/initial-admin-password.txt" --dns-port 15353
-          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows service failed.' }
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/tectanium-setup.log" -Tail 80; throw 'Installed Windows service failed.' }
           if ((Get-DnsClientServerAddress | Select-Object InterfaceIndex,AddressFamily,ServerAddresses | ConvertTo-Json -Depth 6) -ne $dnsBefore -or @(Get-NetFirewallRule).Count -ne $firewallBefore) { throw 'Installer changed host DNS or firewall rules.' }
           $removed=Start-Process "$env:ProgramFiles/Tectanium DDI Server/unins000.exe" -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -WindowStyle Hidden -Wait -PassThru
           if ($removed.ExitCode -ne 0 -or (Get-Service TectaniumDDI -ErrorAction SilentlyContinue)) { throw 'Service uninstall failed.' }

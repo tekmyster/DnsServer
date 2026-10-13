@@ -11,3 +11,7 @@ Keep the original working administrative session open while changing ACLs, manag
 An existing session, an open TCP port, or an SSH banner does not satisfy the new-session check. A successful login alone does not prove that configuration changes or the intended repair succeeded; verify and report those outcomes separately.
 
 If the fresh-session check fails, retain the original session and correct or safely roll back the change before disconnecting. Do not intentionally close the original session while access validation remains unsuccessful.
+
+## Verified change delivery
+
+Standing user requirement: compile changes, update GitHub and update the production Tectanium deployment as changes are made. Deliver each coherent change set after the relevant build and checks pass. Stage verified immutable binaries, back up current configuration and lease authority, maintain DNS availability through a validated DNS-only standby where needed, preserve DNS/DHCP settings, and verify fresh administrative access and service behavior after deployment. Do not run the fresh-install packages over an existing production installation. The administrative-session requirement above continues to apply to any access or credential change.

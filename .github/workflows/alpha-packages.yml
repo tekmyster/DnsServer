@@ -84,13 +84,15 @@ jobs:
           & (Join-Path $compilerFolder 'ISCC.exe') "/DPackageDir=$payload" "/DReleaseVersion=$env:RELEASE_VERSION" "/DOutputPath=$output" packaging/TectaniumSetup.iss
           if ($LASTEXITCODE -ne 0) { throw 'Setup compilation failed.' }
           $setup=Join-Path $output "Tectanium-$env:RELEASE_VERSION-windows-x64-setup.exe"
-          $dnsBefore=Get-DnsClientServerAddress | ConvertTo-Json -Depth 4
+          dotnet run --project tests/Ipam.Tests/Ipam.Tests.csproj -c Release --no-build -- --prepare-package "$env:ProgramData/Tectanium DDI Server" 15353
+          if ($LASTEXITCODE -ne 0) { throw 'Windows fixture preparation failed.' }
+          $dnsBefore=Get-DnsClientServerAddress | Select-Object InterfaceIndex,AddressFamily,ServerAddresses | ConvertTo-Json -Depth 6
           $firewallBefore=@(Get-NetFirewallRule).Count
-          $installed=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$env:RUNNER_TEMP/tectanium-setup.log`"") -WindowStyle Hidden -Wait -PassThru
+          $installed=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DnsPort=15353','/ConsolePort=15380',"/LOG=`"$env:RUNNER_TEMP/tectanium-setup.log`"") -WindowStyle Hidden -Wait -PassThru
           if ($installed.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP/tectanium-setup.log" -Tail 50; throw 'Setup installation failed.' }
-          python packaging/check-service.py http://127.0.0.1:5380/ "$env:ProgramData/Tectanium DDI Server/initial-admin-password.txt"
+          python packaging/check-service.py http://127.0.0.1:15380/ "$env:ProgramData/Tectanium DDI Server/initial-admin-password.txt" --dns-port 15353
           if ($LASTEXITCODE -ne 0) { throw 'Installed Windows service failed.' }
-          if ((Get-DnsClientServerAddress | ConvertTo-Json -Depth 4) -ne $dnsBefore -or @(Get-NetFirewallRule).Count -ne $firewallBefore) { throw 'Installer changed host DNS or firewall rules.' }
+          if ((Get-DnsClientServerAddress | Select-Object InterfaceIndex,AddressFamily,ServerAddresses | ConvertTo-Json -Depth 6) -ne $dnsBefore -or @(Get-NetFirewallRule).Count -ne $firewallBefore) { throw 'Installer changed host DNS or firewall rules.' }
           $removed=Start-Process "$env:ProgramFiles/Tectanium DDI Server/unins000.exe" -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -WindowStyle Hidden -Wait -PassThru
           if ($removed.ExitCode -ne 0 -or (Get-Service TectaniumDDI -ErrorAction SilentlyContinue)) { throw 'Service uninstall failed.' }
           if (-not (Test-Path "$env:ProgramData/Tectanium DDI Server/auth.config")) { throw 'Uninstall removed configuration.' }

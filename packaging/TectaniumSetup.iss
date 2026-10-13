@@ -11,7 +11,7 @@
 AppId={{55F45C41-7E50-43B4-9D0B-CA1F0334F1A8}
 AppName=Tectanium DDI Server
 AppVersion={#ReleaseVersion}
-AppPublisher=Tectanium contributors
+AppPublisher=Tekmyster
 AppPublisherURL=https://github.com/tekmyster/Tectanium-DDI-Server
 DefaultDirName={autopf}\Tectanium DDI Server
 DefaultGroupName=Tectanium DDI Server
@@ -34,7 +34,7 @@ UninstallDisplayName=Tectanium DDI Server
 [Files]
 Source: "{#PackageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
-Name: "{group}\Open console"; Filename: "http://127.0.0.1:5380/"
+Name: "{group}\Open console"; Filename: "http://127.0.0.1:{param:ConsolePort|5380}/"
 Name: "{group}\Project and downloads"; Filename: "https://github.com/tekmyster/Tectanium-DDI-Server/releases"
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows-service.ps1"" -AppDir ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated
@@ -43,7 +43,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var ExitCode: Integer;
 begin
   ExtractTemporaryFile('windows-service.ps1');
-  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\windows-service.ps1') + '" -AppDir "' + ExpandConstant('{app}') + '" -Check', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\windows-service.ps1') + '" -AppDir "' + ExpandConstant('{app}') + '" -DnsPort ' + ExpandConstant('{param:DnsPort|53}') + ' -ConsolePort ' + ExpandConstant('{param:ConsolePort|5380}') + ' -Check', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
     Result := 'An existing deployment or occupied port prevents installation. Use an isolated host or follow the migration guide.';
 end;
 
@@ -51,6 +51,6 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var ExitCode: Integer;
 begin
   if CurStep = ssPostInstall then
-    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\windows-service.ps1') + '" -AppDir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\windows-service.ps1') + '" -AppDir "' + ExpandConstant('{app}') + '" -DnsPort ' + ExpandConstant('{param:DnsPort|53}') + ' -ConsolePort ' + ExpandConstant('{param:ConsolePort|5380}'), '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
       RaiseException('The service did not complete installation and administrative validation. Check the setup log before retrying.');
 end;

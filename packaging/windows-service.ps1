@@ -28,18 +28,25 @@ if ($occupied.Count) { throw 'DNS or console ports are occupied. Use an isolated
 if ($DnsPort -ne 53 -and -not (Test-Path -LiteralPath (Join-Path $dataPath 'dns.config'))) { throw 'Prepare a DNS configuration before using a nonstandard DNS port.' }
 if ($Check) { exit 0 }
 New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
-$serviceCredential = [PSCredential]::new('NT SERVICE\' + $serviceName, [Security.SecureString]::new())
 $created = $false
 try {
-    New-Service -Name $serviceName -DisplayName 'Tectanium DDI Server' -BinaryPathName ('"' + $executable + '" "' + $dataPath + '"') -StartupType Automatic -Credential $serviceCredential | Out-Null
+    New-Service -Name $serviceName -DisplayName 'Tectanium DDI Server' -BinaryPathName ('"' + $executable + '" "' + $dataPath + '"') -StartupType Automatic | Out-Null
     $created = $true
+    # Use LocalService with this service's own SID for configuration access. Never start as LocalSystem.
+    $configured = Invoke-CimMethod -InputObject (Get-CimInstance Win32_Service -Filter "Name='$serviceName'") -MethodName Change -Arguments @{StartName='NT AUTHORITY\LocalService';StartPassword=''}
+    if ($configured.ReturnValue -ne 0 -or (Get-CimInstance Win32_Service -Filter "Name='$serviceName'").StartName -ne 'NT AUTHORITY\LocalService') { throw ('The service account could not be configured. Service error: ' + $configured.ReturnValue) }
+    & sc.exe sidtype $serviceName unrestricted | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The service identity could not be configured.' }
+    $serviceSidText = (& sc.exe showsid $serviceName | Out-String)
+    if ($LASTEXITCODE -ne 0 -or $serviceSidText -notmatch 'S-1-5-80-\d+-\d+-\d+-\d+-\d+') { throw 'The service identity could not be read.' }
+    $serviceSid = New-Object Security.Principal.SecurityIdentifier($Matches[0])
     $acl = New-Object Security.AccessControl.DirectorySecurity
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($identity in @('S-1-5-18','S-1-5-32-544')) {
         $sid = New-Object Security.Principal.SecurityIdentifier($identity)
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
     }
-    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new('NT SERVICE\' + $serviceName,'Modify','ContainerInherit,ObjectInherit','None','Allow'))
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($serviceSid,'Modify','ContainerInherit,ObjectInherit','None','Allow'))
     Set-Acl -LiteralPath $dataPath -AclObject $acl
     $passwordPath = Join-Path $dataPath 'initial-admin-password.txt'
     $bytes = New-Object byte[] 32

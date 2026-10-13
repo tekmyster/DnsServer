@@ -4,7 +4,7 @@
 
 Open-source DNS, DHCP and IP address management from Tekmyster, with shared security evidence and optional local model assistance.
 
-**Current version: 0.1.0-alpha.2.** Evaluate the alpha in an isolated deployment. See [feature status](docs/FEATURE-MATRIX.md) for implemented capabilities and remaining work.
+**Current version: 0.1.0-alpha.3.** Evaluate the alpha in an isolated deployment. See [feature status](docs/FEATURE-MATRIX.md) for implemented capabilities and remaining work.
 
 [Download packages](https://github.com/tekmyster/Tectanium-DDI-Server/releases) · [Installation](packaging/INSTALL.md) · [Report an issue](https://github.com/tekmyster/Tectanium-DDI-Server/issues) · [Tekmyster](https://tekmyster.com)
 
@@ -29,6 +29,8 @@ The screenshots below show an isolated demonstration with example data.
 
 ![Tectanium About page](docs/screenshots/about.jpg)
 
+![Tectanium syslog forwarding](docs/screenshots/syslog.jpg)
+
 ## Capabilities
 
 - Authoritative and recursive DNS, DNSSEC and encrypted DNS transports.
@@ -39,6 +41,7 @@ The screenshots below show an isolated demonstration with example data.
 - Explainable tunneling and DGA-pattern suspicion, periodic DNS observations and visible sampling limits.
 - Optional Chat Completions-compatible event explanations, including separately operated local GPU model servers. Explanations are advisory and cannot change protection.
 - Native configuration backups, migration previews and policy rollback.
+- Native [UDP/TCP syslog forwarding](docs/SYSLOG.md) for system/DHCP logs, security events and optional DNS queries.
 
 Predictive intelligence, trained classifiers, learned baselines, DHCPv6 and several HA/IPAM workflows remain in development. Read [the feature matrix](docs/FEATURE-MATRIX.md) and [security roadmap](docs/SECURITY-ROADMAP.md) before planning a deployment.
 

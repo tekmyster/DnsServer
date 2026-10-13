@@ -51,9 +51,10 @@ static class ApiChecks
             }
             var denied = await Call(original, "/api/ipam/list");
             Check(denied.GetProperty("status").GetString() == "invalid-token", "Unauthenticated access was allowed");
+            Check((await Call(original, "/api/logging/syslog/get")).GetProperty("status").GetString() == "invalid-token", "Anonymous syslog settings exposed");
             var login = await Call(original, "/api/user/login", ("user", "admin"), ("pass", password), ("includeInfo", "true"));
             Check(login.GetProperty("status").GetString() == "ok", "Admin authentication failed");
-            Check(login.GetProperty("info").GetProperty("productVersion").GetString() == "0.1.0-alpha.2" && login.GetProperty("info").GetProperty("version").GetString() == "15.6.1", "Product alpha version changed engine compatibility identity");
+            Check(login.GetProperty("info").GetProperty("productVersion").GetString() == "0.1.0-alpha.3" && login.GetProperty("info").GetProperty("version").GetString() == "15.6.1", "Product alpha version changed engine compatibility identity");
             // Login responses have a top-level token; keep this session open throughout validation.
             string token = login.GetProperty("token").GetString();
             original.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -163,6 +164,31 @@ static class ApiChecks
             var badResponse = await UdpQuery("badip.example");
             Check(badResponse.RCODE == DnsResponseCode.Refused && !badResponse.AuthenticData && badResponse.CheckingDisabled, "Live DNS IP block flags failed");
             Check((await UdpQuery("badname.example")).RCODE == DnsResponseCode.Refused, "Live DNS domain blocking failed");
+            Check(!(await Call(original, "/api/logging/syslog/get")).GetProperty("response").GetProperty("settings").GetProperty("enabled").GetBoolean(), "Syslog must default disabled");
+            using (var collector = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+            {
+                int collectorPort = ((IPEndPoint)collector.Client.LocalEndPoint).Port;
+                var forwarding = new DnsServerCore.Logging.SyslogSettings(Enabled:true,Server:"127.0.0.1",Port:collectorPort,SystemEvents:false,SecurityEvents:true,DnsQueries:true);
+                string forwardingJson = JsonSerializer.Serialize(forwarding, DnsServerCore.Logging.SyslogForwarder.JsonOptions);
+                Check((await Call(original,"/api/logging/syslog/set",("revision","0"),("settings",forwardingJson))).GetProperty("status").GetString()=="ok", "Admin cannot configure syslog");
+                Check((await Call(original,"/api/logging/syslog/set",("revision","0"),("settings",forwardingJson))).GetProperty("status").GetString()=="error", "Stale syslog update accepted");
+                Check((await UdpQuery("badname.example")).RCODE==DnsResponseCode.Refused,"Forwarding changed the security response");
+                string firstMessage=System.Text.Encoding.UTF8.GetString((await collector.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(5))).Buffer);
+                string secondMessage=System.Text.Encoding.UTF8.GetString((await collector.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(5))).Buffer);
+                Check(new[]{firstMessage,secondMessage}.Any(m=>m.Contains(" security - ") && m.Contains("badname.example") && m.Contains("Block")), "Security event did not reach the collector");
+                Check(new[]{firstMessage,secondMessage}.Any(m=>m.Contains(" dns - ") && m.Contains("badname.example") && m.Contains("Refused")), "DNS query hook did not reach the collector");
+                Check((await Call(original,"/api/logging/syslog/test")).GetProperty("response").GetProperty("queued").GetBoolean(), "Syslog test API falsely reported success");
+                Check(System.Text.Encoding.UTF8.GetString((await collector.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(5))).Buffer).Contains("syslog forwarding test"), "API test record not received");
+                using var syslogBackupResponse=await original.GetAsync("/api/settings/backup?logSettings=true");
+                byte[] syslogBackup=await syslogBackupResponse.Content.ReadAsByteArrayAsync();
+                using(var syslogArchive=new System.IO.Compression.ZipArchive(new MemoryStream(syslogBackup))) Check(syslogArchive.GetEntry("syslog.json") is not null,"Logging backup omits syslog settings");
+                Check((await Call(original,"/api/logging/syslog/set",("revision","1"),("settings",JsonSerializer.Serialize(forwarding with{Enabled=false},DnsServerCore.Logging.SyslogForwarder.JsonOptions)))).GetProperty("status").GetString()=="ok","Could not disable forwarding");
+                using var syslogRestore=new MultipartFormDataContent();syslogRestore.Add(new StringContent("true"),"logSettings");syslogRestore.Add(new ByteArrayContent(syslogBackup),"file","syslog-backup.zip");
+                using var syslogRestoreResponse=await original.PostAsync("/api/settings/restore",syslogRestore);using var syslogRestoreJson=JsonDocument.Parse(await syslogRestoreResponse.Content.ReadAsStringAsync());
+                Check(syslogRestoreJson.RootElement.GetProperty("status").GetString()=="ok","Syslog native restore failed");
+                Check((await Call(original,"/api/logging/syslog/get")).GetProperty("response").GetProperty("settings").GetProperty("enabled").GetBoolean(),"Syslog restore did not apply settings");
+                Check((await Call(original,"/api/logging/syslog/set",("revision","3"),("settings",JsonSerializer.Serialize(forwarding with{Enabled=false},DnsServerCore.Logging.SyslogForwarder.JsonOptions)))).GetProperty("status").GetString()=="ok","Could not retire collector test");
+            }
             Check((await UdpQuery("host.example")).RCODE == DnsResponseCode.Refused, "Shared device signal not applied to other DNS requests");
             Check((await UdpQuery("no-upstream.invalid")).RCODE == DnsResponseCode.Refused, "Device policy did not block before recursive lookup");
             var dhcpServer = (DnsServerCore.Dhcp.DhcpServer)typeof(DnsWebService).GetField("_dhcpServer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(service);
@@ -206,6 +232,16 @@ static class ApiChecks
             Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "3"), ("policy", SerializePolicy(protectedPolicy)))).GetProperty("status").GetString() == "ok", "Fresh DNS admin session lacks intended policy modify privilege");
             var unauthorizedSource = protectedPolicy with { Misp = new MispSettings(false, "https://unapproved.example/") };
             Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "4"), ("policy", SerializePolicy(unauthorizedSource)))).GetProperty("status").GetString() == "error", "DNS-only admin can redirect MISP credential use");
+            Check((await Call(dnsAdmin,"/api/logging/syslog/set",("revision","4"),("settings","{}"))).GetProperty("status").GetString()=="error", "DNS-only admin can redirect syslog exports");
+            using(var restrictedBackup=new MemoryStream())
+            {
+                using(var zip=new System.IO.Compression.ZipArchive(restrictedBackup,System.IO.Compression.ZipArchiveMode.Create,true))
+                using(var writer=new StreamWriter(zip.CreateEntry("syslog.json").Open())) writer.Write("{\"enabled\":true,\"server\":\"127.0.0.1\",\"port\":514}");
+                using var attempt=new MultipartFormDataContent();attempt.Add(new StringContent("true"),"logSettings");attempt.Add(new ByteArrayContent(restrictedBackup.ToArray()),"file","restricted-syslog.zip");
+                using var result=await dnsAdmin.PostAsync("/api/settings/restore",attempt);using var parsed=JsonDocument.Parse(await result.Content.ReadAsStringAsync());
+                Check(parsed.RootElement.GetProperty("status").GetString()=="error","Native restore bypassed syslog administration permission");
+                Check(!(await Call(original,"/api/logging/syslog/get")).GetProperty("response").GetProperty("settings").GetProperty("enabled").GetBoolean(),"Rejected restore changed forwarding");
+            }
             Check((await Call(fresh, "/api/security/policy/get")).GetProperty("response").GetProperty("policy").GetProperty("revision").GetInt64() == 4, "Denied source change mutated policy or fresh administrative access was lost");
             Check((await Call(fresh, "/api/security/policy/history")).GetProperty("response").GetProperty("policies").GetArrayLength() > 1, "Policy history API lacks prior revisions");
             Check((await Call(dnsAdmin, "/api/security/policy/rollback", ("revision", "4"), ("targetRevision", "1"))).GetProperty("status").GetString() == "error", "Rollback bypasses MISP configuration permission");

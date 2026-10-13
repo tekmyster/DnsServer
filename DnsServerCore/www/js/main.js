@@ -920,6 +920,7 @@ function refreshDnsSettings(keepFeedback) {
                 updateDnsSettingsDataAndGui(responseJSON);
 
             loadDnsSettings(responseJSON);
+            refreshSyslogSettings();
             checkForReverseProxy(responseJSON);
 
             if (sessionData.info.permissions.Settings.canModify) {

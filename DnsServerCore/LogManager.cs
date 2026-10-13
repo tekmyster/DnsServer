@@ -755,17 +755,17 @@ namespace DnsServerCore
 
         public void Write(Exception ex)
         {
-            Write(_noStackTrace ? ex.Message : ex.ToString());
+            WriteEvent(_noStackTrace ? ex.Message : ex.ToString(), 3);
         }
 
         public void Write(string message, Exception ex)
         {
-            Write(message + "\r\n" + (_noStackTrace ? ex.Message : ex.ToString()));
+            WriteEvent(message + "\r\n" + (_noStackTrace ? ex.Message : ex.ToString()), 3);
         }
 
         public void Write(EndPoint ep, Exception ex)
         {
-            Write(ep, _noStackTrace ? ex.Message : ex.ToString());
+            WriteEvent(GetIpInfo(ep) + (_noStackTrace ? ex.Message : ex.ToString()), 3);
         }
 
         public void Write(EndPoint ep, string message)
@@ -775,12 +775,12 @@ namespace DnsServerCore
 
         public void Write(EndPoint ep, string message, Exception ex)
         {
-            Write(GetIpInfo(ep) + message + "\r\n" + (_noStackTrace ? ex.Message : ex.ToString()));
+            WriteEvent(GetIpInfo(ep) + message + "\r\n" + (_noStackTrace ? ex.Message : ex.ToString()), 3);
         }
 
         public void Write(EndPoint ep, DnsTransportProtocol protocol, Exception ex)
         {
-            Write(ep, protocol, _noStackTrace ? ex.Message : ex.ToString());
+            WriteEvent(GetIpInfo(ep) + "[" + protocol.ToString().ToUpper() + "] " + (_noStackTrace ? ex.Message : ex.ToString()), 3);
         }
 
         public void Write(EndPoint ep, DnsTransportProtocol protocol, DnsDatagram request, DnsDatagram response)
@@ -880,7 +880,7 @@ namespace DnsServerCore
                 responseInfo += "; ANSWER: " + answer;
             }
 
-            Write(ep, protocol, requestInfo + responseInfo);
+            WriteLocal(GetIpInfo(ep) + "[" + protocol.ToString().ToUpper() + "] " + requestInfo + responseInfo);
         }
 
         public void Write(EndPoint ep, DnsTransportProtocol protocol, string message)
@@ -900,10 +900,22 @@ namespace DnsServerCore
 
         public void Write(EndPoint ep, string protocol, string message, Exception ex)
         {
-            Write(GetIpInfo(ep) + "[" + protocol.ToUpper() + "] " + message + "\r\n" + (_noStackTrace ? ex.Message : ex.ToString()));
+            WriteEvent(GetIpInfo(ep) + "[" + protocol.ToUpper() + "] " + message + "\r\n" + (_noStackTrace ? ex.Message : ex.ToString()), 3);
         }
 
         public void Write(string message)
+        {
+            WriteEvent(message, 6);
+        }
+        private void WriteEvent(string message, int severity)
+        {
+            SyslogForwarder?.RecordSystem(message, severity);
+            WriteLocal(message);
+        }
+
+        public Logging.SyslogForwarder SyslogForwarder { get; set; }
+
+        private void WriteLocal(string message)
         {
             if (_loggingType != LoggingType.None)
                 _channelWriter?.TryWrite(new LogQueueItem(message));

@@ -80,6 +80,7 @@ namespace DnsServerCore
         readonly string _configFolder;
 
         readonly LogManager _log;
+        readonly Logging.SyslogForwarder _syslog;
         readonly AuthManager _authManager;
 
         readonly WebServiceApi _api;
@@ -181,6 +182,8 @@ namespace DnsServerCore
             Directory.CreateDirectory(Path.Combine(_configFolder, "zones"));
 
             _log = new LogManager(isPortableApp, _configFolder);
+            _syslog = new Logging.SyslogForwarder(_configFolder, () => _dnsServer?.ServerDomain ?? Environment.MachineName);
+            _log.SyslogForwarder = _syslog;
             _authManager = new AuthManager(this, _configFolder, _log);
 
             _api = new WebServiceApi(this, updateCheckUri);
@@ -194,6 +197,7 @@ namespace DnsServerCore
             _ipamApi = new WebServiceIpamApi(this);
             string suffixFile = Path.Combine(_appFolder, "Security", "public_suffix_list.dat");
             _security = new Security.DdiSecurityManager(_configFolder, new Security.PublicSuffixes(File.ReadLines(suffixFile)));
+            _security.EventRecorded = _syslog.RecordSecurity;
             _securityApi = new WebServiceSecurityApi(this);
             _allocation = new DistributedAllocation(Path.Combine(_configFolder, "dhcp-allocation.json"));
             _netbox = new Ipam.NetBoxConnector(_configFolder);
@@ -264,6 +268,7 @@ namespace DnsServerCore
             await StopAsync();
 
             await _security.DisposeAsync();
+            await _syslog.DisposeAsync();
 
             _authManager?.Dispose();
 
@@ -760,6 +765,9 @@ namespace DnsServerCore
 
                     if (File.Exists(logConfigFile) && (File.GetLastWriteTimeUtc(logConfigFile) > ifModifiedSince))
                         backupZip.CreateEntryFromFile(logConfigFile, "log.config");
+                    string syslogConfigFile = Path.Combine(_configFolder, "syslog.json");
+                    if (File.Exists(syslogConfigFile) && File.GetLastWriteTimeUtc(syslogConfigFile) > ifModifiedSince)
+                        backupZip.CreateEntryFromFile(syslogConfigFile, "syslog.json");
                 }
 
                 if (zones)
@@ -970,6 +978,15 @@ namespace DnsServerCore
                 {
                     if (logSettings && !isConfigTransfer)
                     {
+                        ZipArchiveEntry syslogEntry = backupZip.GetEntry("syslog.json");
+                        if (syslogEntry is not null)
+                        {
+                            if (implantSession is not null && (implantSession.Type is not (UserSessionType.Standard or UserSessionType.ApiToken) || !_authManager.IsPermitted(PermissionSection.Administration, implantSession.User, PermissionFlag.Modify)))
+                                throw new DnsWebServiceException("Administration modify permission is required to restore syslog forwarding.");
+                            if (syslogEntry.Length > 4096) throw new ArgumentException("Syslog settings are too large.");
+                            await using Stream syslogStream = syslogEntry.Open();
+                            await _syslog.RestoreAsync(syslogStream);
+                        }
                         ZipArchiveEntry entry = backupZip.GetEntry("log.config");
                         if (entry is not null)
                         {
@@ -2259,6 +2276,9 @@ namespace DnsServerCore
 
             //settings
             _webService.MapGetAndPost("/api/settings/get", _settingsApi.GetDnsSettings);
+            _webService.MapGetAndPost("/api/logging/syslog/get", GetSyslogSettings);
+            _webService.MapPost("/api/logging/syslog/set", SetSyslogSettingsAsync);
+            _webService.MapPost("/api/logging/syslog/test", SendSyslogTest);
             _webService.MapGetAndPost("/api/settings/set", _settingsApi.SetDnsSettingsAsync);
             _webService.MapGetAndPost("/api/settings/getTsigKeyNames", _settingsApi.GetTsigKeyNames);
             _webService.MapGetAndPost("/api/settings/forceUpdateBlockLists", _settingsApi.ForceUpdateBlockLists);
@@ -3017,6 +3037,7 @@ namespace DnsServerCore
                 //init dns server
                 _dnsServer = new DnsServer(_configFolder, Path.Combine(_appFolder, "dohwww"), _log);
                 _dnsServer.SecurityManager = _security;
+                _dnsServer.SyslogForwarder = _syslog;
 
                 //init dhcp server
                 _dhcpServer = new DhcpServer(Path.Combine(_configFolder, "scopes"), _log);

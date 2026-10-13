@@ -45,18 +45,19 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <link href="css/tectanium.css?v=tectanium-1" rel="stylesheet" />
 
     <script src="js/common.js"></script>
-    <script src="js/main.js?v=tectanium-1"></script>
-    <script src="js/auth.js?v=tectanium-1"></script>
-    <script src="js/cluster.js?v=tectanium-1"></script>
+    <script src="js/main.js?v=0.1.0-alpha.3"></script>
+    <script src="js/auth.js?v=0.1.0-alpha.3"></script>
+    <script src="js/cluster.js?v=0.1.0-alpha.3"></script>
     <script src="js/zone.js"></script>
     <script src="js/other-zones.js"></script>
     <script src="js/apps.js"></script>
     <script src="js/dnsclient.js"></script>
     <script src="js/dhcp.js"></script>
     <script src="js/ipam.js"></script>
-    <script src="js/security.js?v=0.1.0-alpha.2"></script>
+    <script src="js/security.js?v=0.1.0-alpha.3"></script>
     <script src="js/ddi.js"></script>
     <script src="js/logs.js"></script>
+    <script src="js/syslog.js?v=0.1.0-alpha.3"></script>
     <script src="js/product-ux.js"></script>
     <script src="js/migration.js"></script>
 </head>
@@ -2367,37 +2368,53 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                 </div>
 
                                                 <div id="settingsTabPaneLogging" role="tabpanel" class="tab-pane">
+                                                    <div id="syslogPanel" class="well well-sm form-horizontal">
+                                                        <h4 id="syslogHeading">Syslog</h4>
+                                                        <p id="syslogFeedback" role="status" aria-live="polite">Loading forwarding settings…</p>
+                                                        <fieldset id="syslogFields" aria-labelledby="syslogHeading" disabled>
+                                                            <div class="form-group"><div class="col-sm-offset-3 col-sm-8"><div class="checkbox"><label><input id="syslogEnabled" type="checkbox"> Enable forwarding</label></div></div></div>
+                                                            <div class="form-group"><label for="syslogServer" class="col-sm-3 control-label">Server</label><div class="col-sm-6"><input id="syslogServer" type="text" class="form-control" maxlength="253" placeholder="syslog.example.com"></div></div>
+                                                            <div class="form-group"><label for="syslogPort" class="col-sm-3 control-label">Port</label><div class="col-sm-3"><input id="syslogPort" type="number" class="form-control" value="514" min="1" max="65535"></div></div>
+                                                            <div class="form-group"><label for="syslogTransport" class="col-sm-3 control-label">Transport</label><div class="col-sm-3"><select id="syslogTransport" class="form-control"><option value="Udp">UDP</option><option value="Tcp">TCP</option></select></div><div class="col-sm-offset-3 col-sm-8 help-block">UDP and TCP send unencrypted logs. Use a trusted network.</div></div>
+                                                            <div class="form-group"><span class="col-sm-3 control-label">Events</span><div class="col-sm-8"><div class="checkbox"><label><input id="syslogSystem" type="checkbox"> System and DHCP</label></div><div class="checkbox"><label><input id="syslogSecurity" type="checkbox"> Security events</label></div><div class="checkbox"><label><input id="syslogQueries" type="checkbox"> DNS queries</label></div></div></div>
+                                                            <details><summary>Advanced</summary><div style="padding-top: 15px;"><div class="form-group"><label for="syslogFacility" class="col-sm-3 control-label">Facility</label><div class="col-sm-4"><select id="syslogFacility" class="form-control"></select></div></div><div class="form-group"><label for="syslogFraming" class="col-sm-3 control-label">TCP framing</label><div class="col-sm-4"><select id="syslogFraming" class="form-control"><option value="OctetCounting">Octet counting</option><option value="LineDelimited">Line delimited</option></select></div></div></div></details>
+                                                        </fieldset>
+                                                        <p id="syslogHealth" class="text-muted" role="status" aria-live="polite"></p>
+                                                        <button id="syslogSave" type="button" class="btn btn-primary" disabled onclick="saveSyslogSettings();">Save forwarding</button>
+                                                        <button id="syslogTest" type="button" class="btn btn-default" disabled onclick="sendSyslogTest();">Send test</button>
+                                                        <button id="syslogRefresh" type="button" class="btn btn-default" onclick="refreshSyslogSettings();">Refresh</button>
+                                                    </div>
                                                     <div class="well well-sm form-horizontal">
                                                         <div class="form-group">
-                                                            <label class="col-sm-3 control-label">Enable Logging To</label>
+                                                            <label class="col-sm-3 control-label">Local output</label>
                                                             <div class="col-sm-8">
                                                                 <div class="radio">
                                                                     <label>
                                                                         <input type="radio" name="rdLoggingType" id="rdLoggingTypeNone" value="None">
                                                                         None
                                                                     </label>
-                                                                    <div style="padding-top: 5px; padding-left: 20px;">Disables all logging including error logs and audit logs.</div>
+                                                                    <div style="padding-top: 5px; padding-left: 20px;">Keep no local logs. Syslog forwarding is configured separately.</div>
                                                                 </div>
                                                                 <div class="radio">
                                                                     <label>
                                                                         <input type="radio" name="rdLoggingType" id="rdLoggingTypeFile" value="File">
                                                                         File
                                                                     </label>
-                                                                    <div style="padding-top: 5px; padding-left: 20px;">Enables logging errors and audit logs to the log file.</div>
+                                                                    <div style="padding-top: 5px; padding-left: 20px;">Write operational and audit logs to files.</div>
                                                                 </div>
                                                                 <div class="radio">
                                                                     <label>
                                                                         <input type="radio" name="rdLoggingType" id="rdLoggingTypeConsole" value="Console">
                                                                         Console
                                                                     </label>
-                                                                    <div style="padding-top: 5px; padding-left: 20px;">Enables logging errors and audit logs to the console.</div>
+                                                                    <div style="padding-top: 5px; padding-left: 20px;">Write operational and audit logs to the service console.</div>
                                                                 </div>
                                                                 <div class="radio">
                                                                     <label>
                                                                         <input type="radio" name="rdLoggingType" id="rdLoggingTypeFileAndConsole" value="FileAndConsole">
-                                                                        Both File And Console
+                                                                        File and console
                                                                     </label>
-                                                                    <div style="padding-top: 5px; padding-left: 20px;">Enables logging errors and audit logs to both the log file and console.</div>
+                                                                    <div style="padding-top: 5px; padding-left: 20px;">Write operational and audit logs to files and the service console.</div>
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -2407,31 +2424,31 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                             <div class="col-sm-8">
                                                                 <div class="checkbox">
                                                                     <label>
-                                                                        <input id="chkIgnoreResolverLogs" type="checkbox"> Ignore Resolver Error Logs
+                                                                        <input id="chkIgnoreResolverLogs" type="checkbox"> Skip resolver errors
                                                                     </label>
                                                                 </div>
                                                                 <div style="padding-top: 5px; padding-left: 20px;">Enable this option to stop logging domain name resolution errors.</div>
 
                                                                 <div class="checkbox">
                                                                     <label>
-                                                                        <input id="chkNoStackTrace" type="checkbox"> No Stack Trace
+                                                                        <input id="chkNoStackTrace" type="checkbox"> Short error messages
                                                                     </label>
                                                                 </div>
                                                                 <div style="padding-top: 5px; padding-left: 20px;">Enable to log only short error messages instead of full exception stack trace.</div>
 
                                                                 <div class="checkbox">
                                                                     <label>
-                                                                        <input id="chkLogQueries" type="checkbox"> Log All Queries
+                                                                        <input id="chkLogQueries" type="checkbox"> Save DNS queries
                                                                     </label>
                                                                 </div>
-                                                                <div style="padding-top: 5px; padding-left: 20px;">Enable this option to log every query received by this DNS Server and the corresponding response answers into the log file.</div>
+                                                                <div style="padding-top: 5px; padding-left: 20px;">Include received DNS queries and answers in local output.</div>
 
                                                                 <div class="checkbox">
                                                                     <label>
                                                                         <input id="chkUseLocalTime" type="checkbox"> Use Local Time
                                                                     </label>
                                                                 </div>
-                                                                <div style="padding-top: 5px; padding-left: 20px;">Enable this option to use local time instead of UTC for logging.</div>
+                                                                <div style="padding-top: 5px; padding-left: 20px;">Use the server timezone for local output. Syslog timestamps use UTC.</div>
                                                             </div>
                                                         </div>
 
@@ -3861,6 +3878,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                         <p>Version <span id="lblAboutVersion"></span></p>
                                         <p>Server up since <span id="lblAboutUptime"></span></p>
                                         <p>By <a href="https://tekmyster.com" target="_blank" rel="noopener noreferrer">Tekmyster</a></p>
+                                        <p>Built on <a href="https://github.com/TechnitiumSoftware/DnsServer" target="_blank" rel="noopener noreferrer">Technitium DNS Server</a> by Shreyas Zare and the Technitium team.</p>
                                         <p><a href="https://github.com/tekmyster/Tectanium-DDI-Server/releases" target="_blank" rel="noopener noreferrer">Downloads</a> &middot; <a href="https://github.com/tekmyster/Tectanium-DDI-Server" target="_blank" rel="noopener noreferrer">Source code</a> &middot; <a href="https://github.com/tekmyster/Tectanium-DDI-Server/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></p>
                                         <h3>Documentation</h3>
                                         <p><a href="https://github.com/tekmyster/Tectanium-DDI-Server/blob/ddi-foundation/APIDOCS.md" target="_blank" rel="noopener noreferrer">HTTP API</a> &middot; <a href="https://github.com/tekmyster/Tectanium-DDI-Server/blob/ddi-foundation/docs/FEATURE-MATRIX.md" target="_blank" rel="noopener noreferrer">Feature status</a> &middot; <a href="https://github.com/tekmyster/Tectanium-DDI-Server/blob/ddi-foundation/packaging/INSTALL.md" target="_blank" rel="noopener noreferrer">Installation</a></p>

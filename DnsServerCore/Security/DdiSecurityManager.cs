@@ -96,6 +96,7 @@ namespace DnsServerCore.Security
         public Action DeviceContextChanged { get; set; }
         public Func<string> NodeName { get; set; } = () => Environment.MachineName.ToLowerInvariant();
         public Func<SecuritySignal[], CancellationToken, Task> PublishSignals { get; set; }
+        public Action<SecurityEvent> EventRecorded { get; set; }
         public Func<string> PublicationDescription { get; set; }
         public Action SharedStateChanged { get; set; }
 
@@ -304,6 +305,7 @@ namespace DnsServerCore.Security
         void Record(SecurityEvent item)
         {
             lock (_sync) { _recent.Enqueue(item); while (_recent.Count > 1000) _recent.Dequeue(); }
+            EventRecorded?.Invoke(item);
             if (!_events.Writer.TryWrite(item)) Interlocked.Increment(ref _dropped);
         }
         void PublishDeviceSignal(string service, SecurityDevice device, int score, string reason, string[] evidenceKeys = null)

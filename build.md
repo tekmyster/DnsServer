@@ -15,7 +15,7 @@ With PowerShell 7:
 ```powershell
 ./scripts/build-ddi.ps1
 ./scripts/test-ddi.ps1
-./scripts/package-tectanium.ps1 -Version 0.1.0-alpha.2 -Runtime portable
+./scripts/package-tectanium.ps1 -Version 0.1.0-alpha.3 -Runtime portable
 ```
 
 Other package targets are win-x64, linux-x64 and linux-arm64. The Windows service is built from Tectanium.WindowsService. The pinned GitHub Actions workflow builds and tests distributable packages on disposable hosts. See [installation](packaging/INSTALL.md).

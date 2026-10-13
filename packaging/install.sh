@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-version=0.1.0-alpha.2
+version=0.1.0-alpha.3
 archive=''
 checksums=''
 stage_only=0

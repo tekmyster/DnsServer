@@ -15,7 +15,7 @@ p.add_argument('--runtime', required=True)
 a = p.parse_args()
 root = pathlib.Path(__file__).resolve().parent.parent
 files = sorted(f for f in a.folder.rglob('*') if f.is_file())
-banned = {'auth.config', 'dns.config', 'security.json', 'credentials.json', 'lab-connection.json'}
+banned = {'auth.config', 'dns.config', 'security.json', 'syslog.json', 'credentials.json', 'lab-connection.json'}
 if any(f.name in banned or f.suffix in {'.key', '.kdbx'} for f in files):
     raise SystemExit('Deployment data must not be included in a package.')
 metadata = {'product': 'Tectanium DDI Server', 'release': a.version, 'runtime': a.runtime,

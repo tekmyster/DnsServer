@@ -6,6 +6,7 @@ using System.Numerics;
 if (args.Length > 0 && (args[0] == "--package" || args[0] == "--prepare-package")) { await PackageChecks.Run(args); return; }
 
 if (args.Contains("--migration")) { await MigrationChecks.Run(args.Contains("--serve")); return; }
+if (args.Contains("--syslog")) { await SyslogChecks.Run(); return; }
 
 if (args.Contains("--transport")) { await DistributedTransportChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--api") || args.Contains("--serve")) { await ApiChecks.Run(args.Contains("--serve")); return; }

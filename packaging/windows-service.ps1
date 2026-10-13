@@ -4,6 +4,8 @@ param([Parameter(Mandatory=$true)][string]$AppDir,
       [ValidateRange(1024,65535)][int]$ConsolePort=5380,
       [switch]$Check, [switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
+# A setup launched from PowerShell 7 can inherit its module search path. Load the matching built-in security module explicitly.
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 $serviceName = 'TectaniumDDI'
 $appPath = [IO.Path]::GetFullPath($AppDir)
 $dataPath = [IO.Path]::GetFullPath($DataDir)

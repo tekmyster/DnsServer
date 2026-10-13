@@ -284,7 +284,7 @@ $(function () {
     var headerHtml = $("#header").html();
 
     $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/tectanium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">Tectanium</span></a>" + headerHtml + "</div>");
-    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/DnsServer\" target=\"_blank\">Tectanium source</a> | <a href=\"https://github.com/tekmyster/DnsServer/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
+    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/Tectanium-DDI-Server\" target=\"_blank\">Tectanium source</a> | <a href=\"https://github.com/tekmyster/Tectanium-DDI-Server/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
 
     loadQuickBlockLists();
     loadQuickForwardersList();

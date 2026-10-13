@@ -1,4 +1,4 @@
-# Tectanium DDI
+# Tectanium DDI Server
 
 ![Tectanium](docs/branding/tectanium-preview.png)
 

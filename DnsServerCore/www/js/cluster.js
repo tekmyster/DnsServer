@@ -172,6 +172,10 @@ function reloadAdminClusterView(responseJSON) {
                     clusterNodestate = "<span class=\"label label-warning\">Unreachable</span>";
                     break;
 
+                case "Fenced":
+                    clusterNodestate = "<span class=\"label label-warning\">Fenced</span>";
+                    break;
+
                 default:
                     clusterNodestate = "<span class=\"label label-warning\">Unknown</span>";
                     break;
@@ -225,7 +229,9 @@ function reloadAdminClusterView(responseJSON) {
                     if (responseJSON.response.clusterNodes[i].state == "Self")
                         tableHtmlRows += "<li><a href=\"#\" data-id=\"" + i + "\" data-node-name=\"" + htmlEncode(responseJSON.response.clusterNodes[i].name) + "\" data-node-ip=\"" + ipAddressesCsv + "\" onclick=\"showEditSelfClusterNodeModal(this); return false;\">Edit Node</a></li>";
 
-                    if (responseJSON.response.clusterNodes[i].type == "Secondary")
+                    if (responseJSON.response.clusterNodes[i].state == "Fenced")
+                        tableHtmlRows += "<li class=\"disabled\"><a aria-disabled=\"true\" tabindex=\"-1\" title=\"Complete DHCP ownership migration before removing this node.\">Remove Node</a></li>";
+                    else if (responseJSON.response.clusterNodes[i].type == "Secondary")
                         tableHtmlRows += "<li><a href=\"#\" data-id=\"" + i + "\" data-node-id=\"" + htmlEncode(responseJSON.response.clusterNodes[i].id) + "\" data-node-name=\"" + htmlEncode(responseJSON.response.clusterNodes[i].name) + "\" onclick=\"showRemoveSecondaryClusterNodeModal(this); return false;\">Remove Node</a></li>";
 
                     tableHtmlRows += "</ul></div>";
@@ -1033,8 +1039,13 @@ function updateClusterNodeDropDown(optClusterNode, addClusterNode, selectedNode)
         if (addClusterNode)
             html += "<option value=\"cluster\">Cluster</option>";
 
-        for (var i = 0; i < sessionData.info.clusterNodes.length; i++)
-            html += "<option value=\"" + htmlEncode(sessionData.info.clusterNodes[i].name) + "\">" + htmlEncode(sessionData.info.clusterNodes[i].name) + " (" + htmlEncode(sessionData.info.clusterNodes[i].type.toLowerCase()) + ")" + "</option>";
+        for (var i = 0; i < sessionData.info.clusterNodes.length; i++) {
+            var clusterNode = sessionData.info.clusterNodes[i];
+            var fenced = clusterNode.state === "Fenced";
+            html += "<option value=\"" + htmlEncode(clusterNode.name) + "\"" + (fenced ? " disabled" : "") + ">" + htmlEncode(clusterNode.name) + " (" + (fenced ? "fenced" : htmlEncode(clusterNode.type.toLowerCase())) + ")</option>";
+            if (fenced && selectedNode === clusterNode.name)
+                selectedNode = addClusterNode ? "cluster" : sessionData.info.dnsServerDomain;
+        }
 
         optClusterNode.html(html);
 
@@ -1048,7 +1059,7 @@ function updateClusterNodeDropDown(optClusterNode, addClusterNode, selectedNode)
         optClusterNode.val(selectedNode);
 
         if ((optClusterNode.val() == null) && (sessionData.info.clusterNodes.length > 0))
-            optClusterNode.val(sessionData.info.clusterNodes[0].name);
+            optClusterNode.val(getPrimaryClusterNodeName());
 
         optClusterNode.show();
     }

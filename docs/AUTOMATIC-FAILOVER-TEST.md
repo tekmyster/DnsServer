@@ -1,5 +1,23 @@
 # Automatic failover test results
 
+## Corrected implementation and passing retest
+
+Retested on 2026-10-13 UTC (2026-10-12 local). Both automatic fenced takeover scenarios passed: primary service failure and abrupt primary VM power loss. The earlier failure report below is retained as historical evidence.
+
+Linux journal commits now synchronize the containing directory before acknowledging leases. Recovery accepts a staged snapshot only when its hash matches the durable watermark. Three abrupt VM power cuts immediately after DHCP ACK retained the acknowledged addresses and lease expirations.
+
+An opt-in Hyper-V host controller now fences every adapter of the failed VM, reads its authoritative journal under that fence, durably surrenders its complete address sequences to the survivor, imports the grants and promotes the survivor. The power-loss scenario took approximately 92 seconds, including booting the failed VM under its persistent fence and checking fresh administrative access. This is a recovery measurement, not a guaranteed failover time.
+
+The survivor renewed the original client lease, allocated a new address, resolved DNS through the client OS resolver and enforced the synthetic malicious-domain rule. Restarting the former primary did not allow it to serve DNS through the fence. Survivor restart retained its Primary role and the former owner’s Fenced identity. The full automated suite passed 325 checks; the product UX check passed.
+
+The VM power-loss scenario used separate fixture data on the same two VMs; the original journals and permanent grants were preserved when restoring the live lab. Immutable deployment directories, complete file hashes and filesystem synchronization also prevent activation of partially persisted runtime files.
+
+Current state: DDI-Lab-02 is Primary and serves the lab. DDI-Lab-01 remains running for SSH access, fenced, with its DDI service stopped. The controller is registered as the `Technitium DDI Lab Failover` logon task. Fresh SSH login/sudo and HTTPS administrative read/modify checks passed from host source `172.30.71.1` while original administrative sessions remained open. Other management sources were not tested.
+
+Evidence in the ignored lab directory: `validation-crash-durability-fixed.json`, `validation-fenced-failover-fixed.json`, and `validation-hard-power-fenced-failover.json`. See [the fencing runbook](HYPERV-FAILOVER.md). Automatic failback/rejoin, other fencing providers, unrecoverable donor disks, long partitions, WAN conditions and production scale remain unqualified or unimplemented.
+
+## Historical failure report
+
 Tested on the two local Hyper-V guests on 2026-10-12, running fork commit `8aea1bbb`. **Full automatic failover did not pass.** New-client DHCP continuity and DNS resolver fallback worked, but existing-lease takeover is absent and abrupt VM power loss exposed an acknowledged-lease durability failure.
 
 ## Test environment

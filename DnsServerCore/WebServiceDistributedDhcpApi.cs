@@ -136,6 +136,39 @@ namespace DnsServerCore
             context.GetCurrentJsonWriter().WriteBoolean("receiverAcknowledged", delivered);
             WriteAllocationState(context);
         }
+        void GetOwnedAllocationAddresses(HttpContext context)
+        {
+            if (context.GetCurrentSession().Type == UserSessionType.ClusterApiToken) RequireAllocationService(context);
+            RequireDhcpPermission(context, PermissionFlag.View);
+            string name = context.Request.GetQueryOrForm("scope");
+            context.GetCurrentJsonWriter().WriteStringArray("addresses", _allocation.OwnedAddresses(name).Select(a => AllocationSequence.Address(a).ToString()).ToArray());
+        }
+        void RecoverFencedAllocation(HttpContext context)
+        {
+            RequireDhcpPermission(context, PermissionFlag.Modify);
+            if (!context.Request.IsHttps || context.GetCurrentSession().Type == UserSessionType.ClusterApiToken || context.Request.QueryOrForm("actingUser") is not null
+                || !_authManager.IsPermitted(PermissionSection.Administration, GetSessionUser(context), PermissionFlag.Delete))
+                throw new DnsWebServiceException("A direct HTTPS administrative recovery session is required.");
+            string owner = AllocationNode(context.Request.GetQueryOrForm("owner"));
+            string payload = context.Request.GetQueryOrForm("state");
+            if (Encoding.UTF8.GetByteCount(payload) > 8 * 1024 * 1024) throw new ArgumentException("Recovery snapshot exceeds 8 MiB.");
+            var state = JsonSerializer.Deserialize<AllocationState>(payload, DistributedAllocation.JsonOptions) ?? throw new ArgumentException("Missing recovery snapshot.");
+            if (state.Replicas is null || state.Plans is null || state.Replicas.Any(r => r.Node != owner || r.Entries is null || r.Entries.Any(e => e.State != "Grant" || e.Borrower != _allocation.NodeName())))
+                throw new ArgumentException("Recovery accepts only the fenced owner's complete exclusive grants to this receiver.");
+            foreach (var plan in state.Plans)
+            {
+                var local = _allocation.Plan(plan.Scope) ?? throw new ArgumentException("Install the identical authority epoch before recovery.");
+                if (JsonSerializer.Serialize(local, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(plan, DistributedAllocation.JsonOptions)) throw new ArgumentException("Recovery changes an authority epoch.");
+                var sequence = new AllocationSequence(plan); int index = Array.IndexOf(plan.Owners.Order(StringComparer.Ordinal).ToArray(), owner);
+                if (index < 0) throw new ArgumentException("Owner does not belong to this plan.");
+                ulong count = (sequence.Count + (ulong)plan.Owners.Length - 1 - (ulong)index) / (ulong)plan.Owners.Length + (ulong)(plan.Reservations ?? []).Count(r => sequence.Owner(r.Address) == owner);
+                var replica = state.Replicas.SingleOrDefault(r => r.Scope == plan.Scope);
+                if (replica is null || (ulong)replica.Entries.Count(e => sequence.Owner(e.Address) == owner) != count) throw new ArgumentException("The original owner's complete capacity must be surrendered before recovery.");
+            }
+            _allocation.Merge(JsonSerializer.SerializeToUtf8Bytes(state, DistributedAllocation.JsonOptions));
+            _log.Write(GetRemoteEndPoint(context), "[" + GetSessionUser(context).Username + "] Imported durably surrendered capacity from externally fenced owner '" + owner + "'.");
+            WriteAllocationState(context);
+        }
         async Task InstallAllocationPlans(AllocationState state)
         {
             if (state is null || state.Plans is null) throw new ArgumentException("Missing allocation plans.");
@@ -199,7 +232,7 @@ namespace DnsServerCore
             if (_allocation.Snapshot().Plans.Length == 0) return;
             string local = Encoding.UTF8.GetString(_allocation.Export());
             // Every enrolled node receives all owners' observations, independent of a fixed HA pair.
-            var peers = _clusterManager.ClusterNodes.Values.Where(n => n.Id != _clusterManager.GetSelfNode().Id).ToArray();
+            var peers = _clusterManager.ClusterNodes.Values.Where(n => n.Id != _clusterManager.GetSelfNode().Id && !n.IsFenced).ToArray();
             var results = await Task.WhenAll(peers.Select(async peer =>
             {
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); deadline.CancelAfter(TimeSpan.FromSeconds(3));

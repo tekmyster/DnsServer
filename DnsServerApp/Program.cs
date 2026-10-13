@@ -116,6 +116,7 @@ namespace DnsServerApp
             catch (Exception ex)
             {
                 Console.WriteLine(ex.ToString());
+                Environment.ExitCode = 1; // Allow service supervisors to detect and retry failed startup.
             }
             finally
             {

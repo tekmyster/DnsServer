@@ -3,6 +3,7 @@ using DnsServerCore.Dns;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text.Json;
 using DnsServerCore.Security;
 using TechnitiumLibrary.Net.Dns;
@@ -81,6 +82,17 @@ static class ApiChecks
             Check(freshInventory.GetProperty("response").GetProperty("inventory").GetProperty("revision").GetInt64() == 3, "Fresh session cannot read intended state");
             var freshWrite = await Call(fresh, "/api/ipam/views/set", ("revision", "3"), ("name", "Fresh session validated"));
             Check(freshWrite.GetProperty("status").GetString() == "ok", "Fresh session lacks administrative modify privilege");
+            service.DnsServer.AuthZoneManager.CreatePrimaryZone("restart-permission.example");
+            var permissionManager = (DnsServerCore.Auth.AuthManager)typeof(DnsWebService).GetField("_authManager", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(service);
+            Check(permissionManager.GetPermission(DnsServerCore.Auth.PermissionSection.Zones, "restart-permission.example") is null, "Missing-permission restart fixture was not established");
+            typeof(DnsWebService).GetMethod("InspectAndFixZonePermissions", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(service, []);
+            using (var postRepair = new HttpClient { BaseAddress = original.BaseAddress })
+            {
+                var postRepairLogin = await Call(postRepair, "/api/user/login", ("user", "admin"), ("pass", password));
+                Check(postRepairLogin.GetProperty("status").GetString() == "ok", "Fresh login failed after restoring missing zone permission");
+                postRepair.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", postRepairLogin.GetProperty("token").GetString());
+                Check((await Call(postRepair, "/api/zones/records/add", ("domain", "probe.restart-permission.example"), ("type", "A"), ("ipAddress", "192.0.2.43"))).GetProperty("status").GetString() == "ok", "Fresh administrative session cannot modify the recovered zone");
+            }
             Check((await Call(fresh, "/api/ddi/dhcp/state/get")).GetProperty("response").GetProperty("state").GetProperty("plans").GetArrayLength() == 0, "Unexpected distributed DHCP bootstrap state");
             Check((await Call(fresh, "/api/ddi/dhcp/prepare", ("state", "{}"))).GetProperty("status").GetString() == "error", "Ordinary admin session can prepare cluster ownership");
             Check((await Call(fresh, "/api/ipam/netbox/settings/get")).GetProperty("response").GetProperty("settings").GetProperty("enabled").GetBoolean() == false, "NetBox integration does not default disabled");

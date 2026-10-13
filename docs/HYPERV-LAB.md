@@ -4,8 +4,8 @@ Deployed on 2026-10-12 from fork commit `8aea1bbb`, using two Ubuntu 24.04 guest
 
 | VM | Role | Address | Console |
 | --- | --- | --- | --- |
-| DDI-Lab-01 | Cluster primary | 172.30.71.11 | http://172.30.71.11:5380/ |
-| DDI-Lab-02 | Cluster secondary | 172.30.71.12 | http://172.30.71.12:5380/ |
+| DDI-Lab-01 | Fenced former primary; DDI stopped | 172.30.71.11 | SSH from host only |
+| DDI-Lab-02 | Active cluster primary | 172.30.71.12 | http://172.30.71.12:5380/ |
 
 Both guests use generation 2, two virtual CPUs, 4 GiB startup memory, and 32 GiB virtual disks. Hyper-V manages their dynamic memory with a 4 GiB maximum per VM. The `Technitium-DDI-Lab` internal switch connects only the host and these guests; its host address is `172.30.71.1/24`. No NAT or external uplink was added, and forwarding on the new host interface is disabled. Existing VMs, switches, services, credentials, and management firewall rules were left unchanged.
 
@@ -17,7 +17,7 @@ Local artifacts live in `C:\Users\dmessana\Technitium\artifacts\hyperv-lab`, whi
 
 HTTPS is available on port 53443 with lab self-signed certificates. Initial native cluster enrollment explicitly accepted the primary's self-signed certificate. Subsequent native peer communication exercised the server's certificate/DANE handling; no reflection-based membership or replacement HTTP clients were used in these VMs.
 
-The guest service is `ddi-lab.service`, with application files under `/opt/ddi-lab` and configuration under `/var/lib/ddi-lab`. The service starts on guest boot. VMs do not automatically start with the Windows host.
+The guest service is `ddi-lab.service`, with application files in immutable `/opt/ddi-lab-build-*` directories and configuration under `/var/lib/ddi-lab`. The service is enabled on guest boot; the fenced former primary is intentionally stopped. Do not restart or unfence it as a failback procedure. VMs do not automatically start with the Windows host.
 
 Use module-qualified commands because this workstation also has VMware commands with the same names:
 
@@ -42,8 +42,10 @@ DNS binds each guest's lab address on port 53. The guest's existing systemd-reso
 - Both guest services restarted successfully with the three leases, IPAM inventory, and security policy retained.
 - Both VMs shut down cleanly and booted again; their services started automatically, reconnected, retained state, and passed fresh administrative read/modify checks.
 
-Temporary client namespaces were deleted, and Hyper-V MAC spoofing was restored to Off. Both VMs and DDI services remain running. Machine-readable check results are in the ignored lab directory as `validation-*.json`.
+Temporary client namespaces were deleted, and Hyper-V MAC spoofing was restored to Off. Both VMs remain running; VM 02 serves DDI while VM 01 is fenced with its service stopped. Machine-readable check results are in the ignored lab directory as `validation-*.json`.
 
 ## Remaining validation
 
-The initial deployment checks were followed by [automatic failover tests](AUTOMATIC-FAILOVER-TEST.md) using a separate private client network. New-client continuity, resolver fallback, and a short peer-link partition worked, but existing-lease takeover and automatic promotion are absent. Abrupt primary VM power loss exposed an acknowledged lease restored as an Offer; the additional `HA-Test` scope is disabled pending repair. Both VMs and the original scopes remain running. Live membership migration, pool exhaustion/overflow, WAN conditions, load/soak behavior, IPv6 DHCP, real MISP/NetBox integrations, and production detection accuracy remain unqualified. DHCP packets came from a purpose-built wire client; a full operating-system DHCP lease lifecycle and an actual relay appliance remain to be tested. Only the local host management source was verified; other authorized paths remain untested. The [feature matrix](FEATURE-MATRIX.md) still governs delivery status.
+The [automatic failover retest](AUTOMATIC-FAILOVER-TEST.md) corrected the initial Linux lease durability failure and passed fenced takeover after service failure and abrupt VM power loss. The host controller runs as the `Technitium DDI Lab Failover` scheduled logon task. See [the runbook](HYPERV-FAILOVER.md) before recovering the fenced node. The private HA test network uses 172.30.72.0/24; separate power-loss fixtures also added 172.30.73.11/.12 guest aliases.
+
+Live membership migration, automatic failback/rejoin, pool exhaustion, WAN conditions, load/soak behavior, IPv6 DHCP, real MISP/NetBox integrations and production detection accuracy remain unqualified. DHCP packets came from a purpose-built wire client; a full operating-system lease lifecycle and an actual relay appliance remain to be tested. Only the local host management source was verified; other authorized paths remain untested. The [feature matrix](FEATURE-MATRIX.md) governs delivery status.

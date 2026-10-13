@@ -120,6 +120,38 @@ static class DistributedTransportChecks
             var bootstrap = await Call(originals[0], "/api/ddi/dhcp/plan/set", ("scope", "Default"), ("owners", string.Join(',', names)));
             Check(bootstrap.GetProperty("status").GetString() == "ok", "Live TLS bootstrap failed: " + bootstrap);
             var stores = services.Select(s => Field<DistributedAllocation>(s, "_allocation")).ToArray();
+            var promotionRejected = await Call(freshAdmins[1], "/api/admin/cluster/secondary/promote", ("forceDeletePrimary", "true"), ("retainFencedPrimary", "true"));
+            Check(promotionRejected.GetProperty("status").GetString() == "error" && promotionRejected.GetProperty("errorMessage").GetString().Contains("durable capacity handoff"), "Fenced promotion accepts incomplete owner surrender");
+            Check((await Call(tlsClients[1], "/api/ddi/dhcp/recoverFencedOwner", ("owner", names[0]), ("state", "{}"))).GetProperty("status").GetString() == "error", "Cluster service token can impersonate the administrative recovery controller");
+            Check((await Call(freshAdmins[1], "/api/ddi/dhcp/recoverFencedOwner", ("owner", names[0]), ("state", JsonSerializer.Serialize(stores[0].Snapshot() with { Replicas = [] }, DistributedAllocation.JsonOptions)))).GetProperty("status").GetString() == "error", "Recovery accepts absent owner grants");
+            var fencedNode = new ClusterNode(Field<ClusterManager>(services[1], "_clusterManager"), 900, new Uri("https://fenced.lab.example:53443"), [IPAddress.Loopback], ClusterNodeType.Secondary, ClusterNodeState.Fenced);
+            using (var fencedBytes = new MemoryStream())
+            {
+                using (var writer = new BinaryWriter(fencedBytes, Encoding.UTF8, true)) fencedNode.WriteTo(writer);
+                fencedBytes.Position = 0;
+                using var reader = new BinaryReader(fencedBytes, Encoding.UTF8, true);
+                using var restoredFenced = new ClusterNode(Field<ClusterManager>(services[1], "_clusterManager"), reader);
+                restoredFenced.InitializeHeartbeatTimer();
+                Check(restoredFenced.IsFenced && restoredFenced.State == ClusterNodeState.Fenced && Field<object>(restoredFenced, "_heartbeatTimer") is null, "Restart reactivates a fenced peer heartbeat");
+                try { await restoredFenced.GetAllocationStateAsync(); throw new Exception("Fenced peer service API was called"); }
+                catch (InvalidOperationException) { Check(true, "Fenced peer API withheld"); }
+            }
+            fencedNode.Dispose();
+            var primaryManager = Field<ClusterManager>(services[0], "_clusterManager");
+            var originalNodes = Field<Dictionary<int, ClusterNode>>(primaryManager, "_clusterNodes");
+            var protectedOwner = new ClusterNode(primaryManager, 2, originalNodes[2].Url, originalNodes[2].IPAddresses, ClusterNodeType.Secondary, ClusterNodeState.Fenced);
+            var protectedNodes = new Dictionary<int, ClusterNode>(originalNodes) { [2] = protectedOwner };
+            typeof(ClusterManager).GetField("_clusterNodes", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(primaryManager, protectedNodes);
+            try
+            {
+                var deletion = await Call(freshAdmins[0], "/api/admin/cluster/primary/deleteSecondary", ("secondaryNodeId", "2"));
+                Check(deletion.GetProperty("status").GetString() == "error" && deletion.GetProperty("errorMessage").GetString().Contains("anchors DHCP ownership"), "Fenced owner can be removed while its authority epoch still depends on membership");
+            }
+            finally
+            {
+                typeof(ClusterManager).GetField("_clusterNodes", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(primaryManager, originalNodes);
+                protectedOwner.Dispose();
+            }
             Check(stores.Select(s => s.Plan("Default").Epoch).Distinct().Count() == 1, "Owners installed different allocation epochs");
             var sequence = new AllocationSequence(stores[0].Plan("Default")); uint address = sequence.Candidates(names[0]).First(); DateTime expiry = DateTime.UtcNow.AddHours(1);
             Check(stores[0].Hold("Default", address, "1-0201", "02-01", "client.lab.example", expiry), "Live owner hold failed"); stores[0].Commit("Default", address, "1-0201", "02-01", "client.lab.example", expiry);

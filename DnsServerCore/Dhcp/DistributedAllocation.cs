@@ -126,7 +126,7 @@ namespace DnsServerCore.Dhcp
         public DistributedAllocation(string path)
         {
             _path = path;
-            if (!File.Exists(path) && File.Exists(path + ".required")) throw new InvalidDataException("Authoritative DHCP state is missing. Recover it before serving clients.");
+            if (!File.Exists(path) && File.Exists(path + ".required") && !File.Exists(path + ".tmp")) throw new InvalidDataException("Authoritative DHCP state is missing. Recover it before serving clients.");
             if (File.Exists(path + ".recovery-required")) throw new InvalidDataException("Peer evidence showed newer authoritative DHCP state. Offline recovery is required before serving.");
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
             _writerLock = new FileStream(path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
@@ -134,7 +134,20 @@ namespace DnsServerCore.Dhcp
             {
                 _state = File.Exists(path) ? JsonSerializer.Deserialize<AllocationState>(File.ReadAllBytes(path), JsonOptions) : new(1, [], []); Validate(_state);
                 if (File.Exists(path + ".required"))
-                { _watermark = JsonSerializer.Deserialize<AllocationWatermark>(File.ReadAllBytes(path + ".required"), JsonOptions) ?? throw new InvalidDataException("Invalid authoritative watermark."); ValidateWatermark(_state, _watermark); }
+                {
+                    _watermark = JsonSerializer.Deserialize<AllocationWatermark>(File.ReadAllBytes(path + ".required"), JsonOptions) ?? throw new InvalidDataException("Invalid authoritative watermark.");
+                    try { ValidateWatermark(_state, _watermark); }
+                    catch (InvalidDataException) when (File.Exists(path + ".tmp"))
+                    {
+                        // A crash after the durable barrier may precede the snapshot rename.
+                        // Complete only the staged generation cryptographically bound to that barrier.
+                        var staged = JsonSerializer.Deserialize<AllocationState>(File.ReadAllBytes(path + ".tmp"), JsonOptions);
+                        Validate(staged); ValidateWatermark(staged, _watermark);
+                        File.Move(path + ".tmp", path, true);
+                        AllocationDurability.SyncDirectory(path);
+                        _state = staged;
+                    }
+                }
                 else if (_state.Plans.Length > 0) throw new InvalidDataException("Authoritative watermark is missing; offline recovery is required.");
                 RebuildLeaseIndex(); _sequences = _state.Plans.ToDictionary(p => p.Scope, p => new AllocationSequence(p));
             }
@@ -206,23 +219,35 @@ namespace DnsServerCore.Dhcp
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             if (_recoveryRequired) throw new InvalidOperationException("Local authoritative state requires offline recovery.");
             EnsureLocalAuthority();
-            string temporary = _path + ".tmp";
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path)));
-            using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-            { JsonSerializer.Serialize(stream, next, JsonOptions); stream.Flush(true); }
-            if (next.Plans.Length > 0)
+            try
             {
-                var watermark = MakeWatermark(next, NodeName());
-                // Publish the barrier before the snapshot: a crash between these writes stops service,
-                // rather than allowing the previous snapshot to allocate an already-advertised address.
-                using (var marker = new FileStream(_path + ".required.tmp", FileMode.Create, FileAccess.Write, FileShare.None)) { JsonSerializer.Serialize(marker, watermark, JsonOptions); marker.Flush(true); }
-                File.Move(_path + ".required.tmp", _path + ".required", true); _watermark = watermark; _verifiedAuthorityState = null;
+                string temporary = _path + ".tmp";
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path)));
+                using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+                { JsonSerializer.Serialize(stream, next, JsonOptions); stream.Flush(true); }
+                if (next.Plans.Length > 0)
+                {
+                    var watermark = MakeWatermark(next, NodeName());
+                    // Publish the barrier before the snapshot: a crash between these writes stops service,
+                    // rather than allowing the previous snapshot to allocate an already-advertised address.
+                    using (var marker = new FileStream(_path + ".required.tmp", FileMode.Create, FileAccess.Write, FileShare.None)) { JsonSerializer.Serialize(marker, watermark, JsonOptions); marker.Flush(true); }
+                    File.Move(_path + ".required.tmp", _path + ".required", true);
+                    _watermark = watermark; _verifiedAuthorityState = null;
+                    AllocationDurability.SyncDirectory(_path);
+                }
+                File.Move(temporary, _path, true);
+                AllocationDurability.SyncDirectory(_path);
+                _state = next;
+                _verifiedAuthorityState = next; _verifiedAuthorityNode = NodeName();
+                foreach (var plan in next.Plans) if (!_sequences.ContainsKey(plan.Scope)) _sequences.Add(plan.Scope, new AllocationSequence(plan));
+                RebuildLeaseIndex();
             }
-            File.Move(temporary, _path, true);
-            _state = next;
-            _verifiedAuthorityState = next; _verifiedAuthorityNode = NodeName();
-            foreach (var plan in next.Plans) if (!_sequences.ContainsKey(plan.Scope)) _sequences.Add(plan.Scope, new AllocationSequence(plan));
-            RebuildLeaseIndex();
+            catch
+            {
+                _recoveryRequired = true;
+                _health = "Durable allocation commit failed; DHCP service withheld until verified recovery.";
+                throw;
+            }
         }
         public void AddPlan(AllocationPlan plan)
         {
@@ -409,6 +434,30 @@ namespace DnsServerCore.Dhcp
                 var p = _state.Plans.Single(p => p.Scope == scope); string owner = _sequences[scope].Owner(address);
                 if (owner == NodeName()) return Local(scope, p).Entries.All(e => e.Address != address || e.State != "Grant");
                 return owner is not null && _state.Replicas.SingleOrDefault(r => r.Scope == scope && r.Node == owner)?.Entries.Any(e => e.Address == address && e.State == "Grant" && e.Borrower == NodeName()) == true;
+            }
+        }
+        public bool EntireOwnerSurrendered(string scope, string owner, string receiver)
+        {
+            lock (_sync)
+            {
+                var plan = _state.Plans.Single(p => p.Scope == scope);
+                int index = Array.IndexOf(plan.Owners.Order(StringComparer.Ordinal).ToArray(), owner);
+                if (index < 0 || owner == receiver || !plan.Owners.Contains(receiver)) return false;
+                ulong expected = (_sequences[scope].Count + (ulong)plan.Owners.Length - 1 - (ulong)index) / (ulong)plan.Owners.Length
+                    + (ulong)(plan.Reservations ?? []).Count(r => _sequences[scope].Owner(r.Address) == owner);
+                var entries = _state.Replicas.SingleOrDefault(r => r.Scope == scope && r.Node == owner)?.Entries ?? [];
+                return (ulong)entries.Count(e => e.State == "Grant" && e.Borrower == receiver && _sequences[scope].Owner(e.Address) == owner) == expected;
+            }
+        }
+        public uint[] OwnedAddresses(string scope, int maximum = 65536)
+        {
+            lock (_sync)
+            {
+                var plan = _state.Plans.Single(p => p.Scope == scope);
+                var sequence = _sequences[scope];
+                var addresses = sequence.Candidates(NodeName()).Concat((plan.Reservations ?? []).Where(r => sequence.Owner(r.Address) == NodeName()).Select(r => r.Address)).Take(maximum + 1).ToArray();
+                if (addresses.Length > maximum) throw new InvalidOperationException("Owner capacity exceeds the configured recovery batch limit.");
+                return addresses;
             }
         }
         public uint[] GrantedAddresses(string scope)

@@ -51,6 +51,21 @@ static class DistributedDhcpChecks
             Check(second.ResolveAt(first, heldAt)?.Lease.Client == "1-0201" && second.ResolveLive(first) is null, "Release destroyed historical ownership or retained current attribution");
             string rollbackPath = Path.Combine(folder, "rollback.json"); File.WriteAllBytes(rollbackPath, old); File.Copy(Path.Combine(folder, "east.json.required"), rollbackPath + ".required");
             Reject(() => new DistributedAllocation(rollbackPath), "Older backup can allocate before contacting peers");
+            string stagedPath = Path.Combine(folder, "staged-recovery.json");
+            File.WriteAllBytes(stagedPath, old);
+            File.WriteAllBytes(stagedPath + ".tmp", east.Export());
+            File.Copy(Path.Combine(folder, "east.json.required"), stagedPath + ".required");
+            await using (var stagedRecovery = new DistributedAllocation(stagedPath) { NodeName = () => "east-a" })
+                Check(stagedRecovery.Export().SequenceEqual(east.Export()) && !File.Exists(stagedPath + ".tmp"), "Interrupted rename did not complete the generation bound to its durable barrier");
+            string missingSnapshotStage = Path.Combine(folder, "missing-snapshot-staged.json");
+            File.WriteAllBytes(missingSnapshotStage + ".tmp", east.Export());
+            File.Copy(Path.Combine(folder, "east.json.required"), missingSnapshotStage + ".required");
+            await using (var firstGeneration = new DistributedAllocation(missingSnapshotStage) { NodeName = () => "east-a" })
+                Check(firstGeneration.Export().SequenceEqual(east.Export()), "Interrupted initial snapshot cannot recover its barrier-bound staged generation");
+            string wrongStage = Path.Combine(folder, "wrong-stage.json");
+            File.WriteAllBytes(wrongStage, old); File.WriteAllBytes(wrongStage + ".tmp", old);
+            File.Copy(Path.Combine(folder, "east.json.required"), wrongStage + ".required");
+            Reject(() => new DistributedAllocation(wrongStage), "Unverified staged data bypasses the authority barrier");
             string missingWatermark = Path.Combine(folder, "missing-watermark.json"); File.WriteAllBytes(missingWatermark, east.Export());
             Reject(() => new DistributedAllocation(missingWatermark), "Missing durable watermark falls back to an unverified owner");
             string stalePath = Path.Combine(folder, "stale.json");
@@ -91,6 +106,7 @@ static class DistributedDhcpChecks
             east.Handoff("lab", [pendingTransfer, transferred, quarantined], "west-a", handoffId, handoffSequence);
             Check(east.Export().SequenceEqual(afterHandoff), "Lost-response retry changed durable handoff");
             Check(!east.HasAuthority("lab", transferred) && east.FindLease("lab", "1-0210") is null, "Donor retains surrendered lease authority");
+            Check(!east.EntireOwnerSurrendered("lab", "east-a", "west-a"), "Partial handoff permits fenced cluster promotion");
             Reject(() => east.Commit("lab", transferred, "1-0210", "02-10", "moved", expiry), "Donor issues an ACK after surrender");
             Check(!west.HasAuthority("lab", transferred), "Receiver acquires authority without donor acknowledgement");
             west.Merge(afterHandoff); west.Merge(beforeHandoff);
@@ -122,6 +138,7 @@ static class DistributedDhcpChecks
             reservationDonor.AddPlan(reservationPlan); reservationTarget.AddPlan(reservationPlan);
             reservationDonor.Handoff(reservationPlan.Scope, [reservedAddress], reservationReceiver, Guid.NewGuid().ToString("N"), 0);
             reservationTarget.Merge(reservationDonor.Export());
+            Check(reservationTarget.EntireOwnerSurrendered(reservationPlan.Scope, reservationOwner, reservationReceiver), "Reservation-only complete surrender is not recognized");
             Check(reservationTarget.Available(reservationPlan.Scope, reservedAddress, "1-0214") && !reservationTarget.Available(reservationPlan.Scope, reservedAddress, "other"), "Reservation handoff loses its fixed client binding");
             reservationTarget.Commit(reservationPlan.Scope, reservedAddress, "1-0214", "02-14", "reserved", expiry);
             Check(!reservationDonor.Available(reservationPlan.Scope, reservedAddress, "1-0214") && reservationTarget.FindLease(reservationPlan.Scope, "1-0214")?.Address == reservedAddress, "Transferred reservation has duplicate ACK authority");

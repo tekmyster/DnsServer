@@ -479,6 +479,15 @@ namespace DnsServerCore
             {
                 Permission zonePermission = _authManager.GetPermission(PermissionSection.Zones, zone.Name);
 
+                // Zone and permission files are saved independently. A power loss can leave
+                // a valid zone without its permission entry; restore the existing admin default.
+                if (zonePermission is null)
+                {
+                    _authManager.SetPermission(PermissionSection.Zones, zone.Name, admins, PermissionFlag.ViewModifyDelete);
+                    zonePermission = _authManager.GetPermission(PermissionSection.Zones, zone.Name);
+                    saveConfig = true;
+                }
+
                 if (!zonePermission.GroupPermissions.TryGetValue(admins, out PermissionFlag adminsPermission) || (adminsPermission != PermissionFlag.ViewModifyDelete))
                 {
                     _authManager.SetPermission(PermissionSection.Zones, zone.Name, admins, PermissionFlag.ViewModifyDelete);
@@ -2283,6 +2292,8 @@ namespace DnsServerCore
             _webService.MapPost("/api/ddi/dhcp/plan/set", SetAllocationPlan);
             _webService.MapPost("/api/ddi/dhcp/grant", GrantAllocation);
             _webService.MapPost("/api/ddi/dhcp/handoff", HandoffAllocation);
+            _webService.MapGetAndPost("/api/ddi/dhcp/ownedAddresses", GetOwnedAllocationAddresses);
+            _webService.MapPost("/api/ddi/dhcp/recoverFencedOwner", RecoverFencedAllocation);
             _webService.MapPost("/api/ddi/dhcp/prepare", PrepareAllocation);
             _webService.MapGetAndPost("/api/ddi/dhcp/history/lookup", LookupAllocationHistory);
             _webService.MapGetAndPost("/api/ipam/netbox/settings/get", GetNetBoxSettings);

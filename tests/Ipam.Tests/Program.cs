@@ -7,6 +7,7 @@ if (args.Contains("--migration")) { await MigrationChecks.Run(args.Contains("--s
 
 if (args.Contains("--transport")) { await DistributedTransportChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--api") || args.Contains("--serve")) { await ApiChecks.Run(args.Contains("--serve")); return; }
+if (args.Contains("--security-analytics")) { await SecurityAnalyticsChecks.Run(); return; }
 if (args.Contains("--security")) { await SecurityChecks.Run(); return; }
 if (args.Contains("--dhcp")) { await DistributedDhcpChecks.Run(); return; }
 if (args.Contains("--netbox")) { await NetBoxChecks.Run(); return; }

@@ -54,7 +54,7 @@ static class SecurityChecks
         BehavioralScore suspicious = null;
         for (int i = 0; i < 80; i++) suspicious = behavior.Observe("suspicious", $"abcdefghijklmnopqrstuvwxyz0123456789{i:D4}.leak.example", "TXT", true, now);
         Check(suspicious.Score >= 70 && suspicious.Contributions.Length >= 3 && suspicious.Confidence == "Uncalibrated", "Synthetic exfiltration-like traffic lacks explained risk");
-        Check(behavior.Observe("suspicious", "ordinary.leak.example", "A", false, now.AddMinutes(6)).Score == 0, "Window does not expire");
+        Check(behavior.Observe("suspicious", "ordinary.leak.example", "A", false, now.AddMinutes(61)).Score == 0, "Window does not expire");
         var client = IPAddress.Parse("192.0.2.10");
         try
         {

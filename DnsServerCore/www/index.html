@@ -2529,6 +2529,19 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                 <div class="col-sm-6"><label for="securityMispLifetime">Evidence lifetime (hours)</label><input id="securityMispLifetime" class="form-control" type="number" min="1" max="168" /></div>
                                             </div>
                                             <p>MISP supplies monitor evidence. Its API key remains on the server and is not saved in the policy.</p>
+                                            <details><summary>Model assistance</summary>
+                                                <p><label><input id="securityLlmEnabled" type="checkbox" /> Enable event explanations</label></p>
+                                                <div class="row">
+                                                    <div class="col-sm-6"><label for="securityLlmEndpoint">Model endpoint</label><input id="securityLlmEndpoint" class="form-control" placeholder="http://127.0.0.1:11434/v1/chat/completions" /></div>
+                                                    <div class="col-sm-6"><label for="securityLlmModel">Model name</label><input id="securityLlmModel" class="form-control" maxlength="128" placeholder="Name served by your model server" /></div>
+                                                </div>
+                                                <div class="row">
+                                                    <div class="col-sm-6"><label for="securityLlmCredential">Credential reference (optional)</label><input id="securityLlmCredential" class="form-control" placeholder="DDI_LLM_API_KEY" /></div>
+                                                </div>
+                                                <p><label><input id="securityLlmRemote" type="checkbox" /> Allow a network endpoint</label></p>
+                                                <p><label><input id="securityLlmDomains" type="checkbox" /> Include registered domains in analysis</label></p>
+                                                <p class="help-block">Analysis sends selected event evidence to the configured model when requested. Client addresses, hardware addresses and full query names are omitted. Network endpoints require HTTPS. Model explanations do not change protection.</p>
+                                            </details>
                                             <button class="btn btn-primary" type="submit">Save settings</button>
                                         </form>
                                         </details><details><summary>Add indicators or exceptions</summary>

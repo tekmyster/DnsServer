@@ -1,3 +1,6 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
 using DnsServerCore;
 using DnsServerCore.Dns;
 using System.Net;
@@ -155,7 +158,7 @@ static class ApiChecks
             Check((await Call(original, "/api/security/policy/set", ("revision", "1"), ("policy", SerializePolicy(securityPolicy)))).GetProperty("status").GetString() == "error", "Stale security policy API write accepted");
             byte[] hardware = [2, 0, 0, 0, 0, 9];
             string clientIdentifier = new DnsServerCore.Dhcp.Options.ClientIdentifierOption(1, hardware).ToString();
-            service.DnsServer.SecurityManager.DeviceResolver = _ => new SecurityDevice("Default", clientIdentifier, BitConverter.ToString(hardware), "lab-client", "default", "Lab", 99);
+            service.DnsServer.SecurityManager.DeviceResolver = ip => ip.Equals(IPAddress.Loopback) ? new SecurityDevice("Default", clientIdentifier, BitConverter.ToString(hardware), "lab-client", "default", "Lab", 99) : null;
             var badResponse = await UdpQuery("badip.example");
             Check(badResponse.RCODE == DnsResponseCode.Refused && !badResponse.AuthenticData && badResponse.CheckingDisabled, "Live DNS IP block flags failed");
             Check((await UdpQuery("badname.example")).RCODE == DnsResponseCode.Refused, "Live DNS domain blocking failed");
@@ -206,6 +209,34 @@ static class ApiChecks
             Check((await Call(fresh, "/api/security/policy/history")).GetProperty("response").GetProperty("policies").GetArrayLength() > 1, "Policy history API lacks prior revisions");
             Check((await Call(dnsAdmin, "/api/security/policy/rollback", ("revision", "4"), ("targetRevision", "1"))).GetProperty("status").GetString() == "error", "Rollback bypasses MISP configuration permission");
             Check((await Call(fresh, "/api/security/policy/rollback", ("revision", "4"), ("targetRevision", "4"))).GetProperty("response").GetProperty("policy").GetProperty("revision").GetInt64() == 5, "Rollback does not publish a new policy revision");
+            var modelPolicy = JsonSerializer.Deserialize<SecurityPolicy>((await Call(fresh, "/api/security/policy/get")).GetProperty("response").GetProperty("policy").GetRawText(), DdiSecurityManager.JsonOptions) with { Llm = new LlmSettings(false, "http://127.0.0.1:11434/v1/chat/completions", "local-model") };
+            Check((await Call(dnsAdmin, "/api/security/policy/set", ("revision", "5"), ("policy", SerializePolicy(modelPolicy)))).GetProperty("status").GetString() == "error", "DNS-only administrator can redirect model evidence");
+            Check((await Call(original, "/api/security/policy/set", ("revision", "5"), ("policy", SerializePolicy(modelPolicy)))).GetProperty("status").GetString() == "ok", "Administrator cannot configure optional model connection");
+            Check((await Call(fresh, "/api/security/policy/get")).GetProperty("response").GetProperty("policy").GetProperty("revision").GetInt64() == 6, "Fresh administrator cannot verify the model configuration change");
+            Check((await Call(dnsAdmin, "/api/security/policy/rollback", ("revision", "6"), ("targetRevision", "5"))).GetProperty("status").GetString() == "error", "Rollback bypasses model configuration permission");
+            Check((await Call(dnsAdmin, "/api/security/events/analyze", ("eventId", "missing"))).GetProperty("status").GetString() == "error", "DNS-only administrator can send model evidence");
+            var modelEventId = securityEvents.GetProperty("response").GetProperty("events")[0].GetProperty("id").GetString();
+            Check((await Call(fresh, "/api/security/events/analyze", ("eventId", modelEventId))).GetProperty("status").GetString() == "error", "Disabled model connection reports successful analysis");
+            var securityManager = (DdiSecurityManager)typeof(DnsWebService).GetField("_security", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(service);
+            for (int i = 0; i < 40; i++)
+            {
+                var analyticRequest = new DnsDatagram(42, false, DnsOpcode.StandardQuery, false, false, true, false, false, false, DnsResponseCode.NoError,
+                    [new DnsQuestionRecord($"abcdefghijklmnopqrstuvwxyz0123456789{i:D4}.leak.example", DnsResourceRecordType.TXT, DnsClass.IN)]);
+                var analyticResponse = new DnsDatagram(42, true, DnsOpcode.StandardQuery, false, false, true, true, false, false, DnsResponseCode.NxDomain, analyticRequest.Question);
+                securityManager.InspectResponse(analyticRequest, new IPEndPoint(IPAddress.Parse("192.0.2.200"), 12345), analyticResponse);
+            }
+            var analyticEvent = securityManager.RecentEvents().Last();
+            Check(analyticEvent.Behavior?.Findings?.Any(f => f.Kind == "DnsTunneling" && f.Score >= 70) == true && analyticEvent.Action == "Monitor", "Corroborated analytics did not reach the event API without automatic blocking");
+            var modelBuilder = WebApplication.CreateBuilder();
+            modelBuilder.Logging.ClearProviders(); modelBuilder.WebHost.UseUrls("http://127.0.0.1:" + FreePort());
+            await using var modelFixture = modelBuilder.Build();
+            modelFixture.MapPost("/v1/chat/completions", () => new { choices = new[] { new { message = new { content = "Fixture explanation: investigate the observed pattern. <b>This text must not become markup.</b>" } } } });
+            await modelFixture.StartAsync();
+            modelPolicy = modelPolicy with { Llm = modelPolicy.Llm with { Enabled = true, Endpoint = modelFixture.Urls.Single() + "/v1/chat/completions" } };
+            Check((await Call(original, "/api/security/policy/set", ("revision", "6"), ("policy", SerializePolicy(modelPolicy)))).GetProperty("status").GetString() == "ok", "Optional local model fixture cannot be enabled");
+            var analyzed = await Call(fresh, "/api/security/events/analyze", ("eventId", analyticEvent.Id));
+            Check(analyzed.GetProperty("status").GetString() == "ok" && analyzed.GetProperty("response").GetProperty("analysis").GetProperty("status").GetString() == "Advisory", "Fresh administrator cannot complete a loopback model analysis");
+            Check(securityManager.Policy.Revision == 7 && securityManager.RecentEvents().Last().Id == analyticEvent.Id, "Model explanation mutated protection or event evidence");
             var investigation = await Call(fresh, "/api/security/events/search", ("from", DateTime.UtcNow.AddMinutes(-10).ToString("O")), ("to", DateTime.UtcNow.AddMinutes(1).ToString("O")));
             var investigatedEvents = investigation.GetProperty("response").GetProperty("search").GetProperty("events");
             Check(investigatedEvents.GetArrayLength() > 0, "Investigation search API lacks events");

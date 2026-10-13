@@ -82,6 +82,7 @@ namespace DnsServerCore.Security
         readonly Dictionary<(string Scope, string Client, string Hardware), List<SecuritySignal>> _deviceSignals = new();
         readonly Dictionary<string, (DateTime Start, int Count)> _dhcpRequests = new(StringComparer.Ordinal);
         readonly BehavioralAnalyzer _behavior;
+        readonly SecurityLlm _llm = new();
         SecurityPolicy _policy;
         Index _index;
         ThreatIndicator[] _mispIndicators = [];
@@ -130,6 +131,11 @@ namespace DnsServerCore.Security
         public MispHealth MispStatus { get { lock (_sync) return !_policy.Misp.Enabled ? _mispHealth with { Status = "Disabled", Indicators = 0 } : _mispHealth with { Indicators = EnrichmentFor(_policy).Count(i => i.Expires > DateTime.UtcNow) }; } }
         public SignalHealth SignalStatus { get { lock (_sync) return _signalHealth; } }
         public SecurityEvent[] RecentEvents() { lock (_sync) return _recent.ToArray(); }
+        public Task<LlmAnalysis> AnalyzeEventAsync(string eventId, CancellationToken cancellationToken)
+        {
+            SecurityEvent evidence = RecentEvents().SingleOrDefault(e => e.Id == eventId) ?? throw new ArgumentException("This event is no longer available for model analysis. Select a recent event.");
+            return _llm.AnalyzeAsync(ReadPolicy().Llm ?? new LlmSettings(), evidence, cancellationToken);
+        }
         public SecuritySignal[] Signals() { lock (_sync) return _signals.Values.Where(s => s.Expires > DateTime.UtcNow && EvidenceActive(s, DateTime.UtcNow)).ToArray(); }
         static string EvidenceKey(ThreatIndicator indicator) => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { indicator.Id, indicator.Source, indicator.Kind, indicator.Value, indicator.Action, indicator.ClientNetwork }, JsonOptions))).ToLowerInvariant();
         bool EvidenceActive(SecuritySignal signal, DateTime now) => signal.EvidenceKeys is null || signal.EvidenceKeys.Length == 0 || signal.EvidenceKeys.Any(k => _index.Evidence.TryGetValue(k, out var indicator) && (!indicator.Expires.HasValue || indicator.Expires > now));
@@ -186,7 +192,7 @@ namespace DnsServerCore.Security
             if (p.Version != 1 || p.Revision < 0 || p.Mode != "Monitor" && p.Mode != "Block" || p.AlertThreshold < 1 || p.AlertThreshold > 100 || p.DeviceThreshold < 1 || p.DeviceThreshold > 100 || p.DeviceDnsResponse != "Monitor" && p.DeviceDnsResponse != "Block" || p.DhcpResponse != "Observe" && p.DhcpResponse != "DenyNewLeases") throw new ArgumentException("Invalid security policy settings.");
             if (p.Misp is null || p.Misp.RefreshSeconds < 60 || p.Misp.RefreshSeconds > 86400 || p.Misp.CacheLifetimeHours < 1 || p.Misp.CacheLifetimeHours > 168 || string.IsNullOrEmpty(p.Misp.ApiKeyEnvironment) || p.Misp.ApiKeyEnvironment.Length > 128 || !p.Misp.ApiKeyEnvironment.StartsWith("DDI_MISP_", StringComparison.Ordinal) || !p.Misp.ApiKeyEnvironment.EndsWith("_API_KEY", StringComparison.Ordinal) || p.Misp.ApiKeyEnvironment.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')) throw new ArgumentException("MISP credential references must use DDI_MISP_*_API_KEY environment variables.");
             if (p.Misp.Enabled && (!Uri.TryCreate(p.Misp.Url, UriKind.Absolute, out Uri url) || url.Scheme != "https" || url.UserInfo.Length > 0 || url.Query.Length > 0 || url.Fragment.Length > 0)) throw new ArgumentException("MISP requires an HTTPS base URL without credentials, query, or fragment.");
-            return p with { Indicators = Normalize(p.Indicators) };
+            return p with { Indicators = Normalize(p.Indicators), Llm = SecurityLlm.Validate(p.Llm ?? new LlmSettings()) };
         }
         static ThreatIndicator[] Normalize(ThreatIndicator[] indicators)
         {
@@ -530,7 +536,7 @@ namespace DnsServerCore.Security
                 SecuritySignal[] snapshot; lock (_sync) { TrimSignals(DateTime.UtcNow); snapshot = _signals.Values.ToArray(); }
                 Save("security-signals.json", snapshot);
             }
-            _mispClient.Dispose(); _stop.Dispose();
+            _llm.Dispose(); _mispClient.Dispose(); _stop.Dispose();
         }
     }
 }

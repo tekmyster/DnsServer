@@ -40,7 +40,7 @@ namespace DnsServerCore
                 string json = context.Request.GetQueryOrForm("policy");
                 if (Encoding.UTF8.GetByteCount(json) > 2 * 1024 * 1024) throw new ArgumentException("Security policy exceeds 2 MiB.");
                 var policy = JsonSerializer.Deserialize<SecurityPolicy>(json, DdiSecurityManager.JsonOptions) ?? throw new ArgumentException("Missing security policy.");
-                if (policy.Misp != _service._security.Policy.Misp && !_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to configure MISP sources and credential references.");
+                if ((policy.Misp != _service._security.Policy.Misp || (policy.Llm ?? new LlmSettings()) != (_service._security.Policy.Llm ?? new LlmSettings())) && !_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to configure enrichment or model connections.");
                 _service._security.SetPolicy(policy, long.Parse(context.Request.GetQueryOrForm("revision")));
                 _service._log.Write(_service.GetRemoteEndPoint(context), "[" + user.Username + "] DDI security policy updated to revision " + _service._security.Policy.Revision);
                 if (_service._clusterManager.ClusterInitialized) _service._clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
@@ -50,6 +50,14 @@ namespace DnsServerCore
             {
                 Authorize(context, PermissionFlag.View); Write(context, "events", _service._security.RecentEvents()); Write(context, "signals", _service._security.Signals());
             }
+            public async Task AnalyzeEvent(HttpContext context)
+            {
+                User user = Authorize(context, PermissionFlag.View);
+                if (!_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to send event evidence to a model.");
+                var analysis = await _service._security.AnalyzeEventAsync(context.Request.GetQueryOrForm("eventId"), context.RequestAborted);
+                _service._log.Write(_service.GetRemoteEndPoint(context), "[" + user.Username + "] Requested advisory model analysis for security event " + analysis.EventId);
+                Write(context, "analysis", analysis);
+            }
             public void History(HttpContext context)
             { Authorize(context, PermissionFlag.View); Write(context, "policies", _service._security.PolicyHistory().Select(p => new { p.Revision, p.Enabled, p.Mode, indicators = p.Indicators.Length }).ToArray()); }
             public void Rollback(HttpContext context)
@@ -57,7 +65,7 @@ namespace DnsServerCore
                 User user = Authorize(context, PermissionFlag.Modify);
                 long revision = long.Parse(context.Request.GetQueryOrForm("revision")); long target = long.Parse(context.Request.GetQueryOrForm("targetRevision"));
                 var policy = _service._security.PolicyHistory().SingleOrDefault(p => p.Revision == target) ?? throw new ArgumentException("Policy revision is not retained.");
-                if (policy.Misp != _service._security.Policy.Misp && !_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to change MISP configuration.");
+                if ((policy.Misp != _service._security.Policy.Misp || (policy.Llm ?? new LlmSettings()) != (_service._security.Policy.Llm ?? new LlmSettings())) && !_service._authManager.IsPermitted(PermissionSection.Administration, user, PermissionFlag.Modify)) throw new DnsWebServiceException("Administration modify permission is required to change enrichment or model connections.");
                 _service._security.SetPolicy(policy, revision);
                 if (_service._clusterManager.ClusterInitialized) _service._clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
                 _service._log.Write(_service.GetRemoteEndPoint(context), "[" + user.Username + "] Rolled back security policy content from revision " + target + " as new revision " + _service._security.Policy.Revision);

@@ -45,14 +45,23 @@ namespace DnsServerCore.Security
 
     public sealed class BehavioralAnalyzer
     {
-        sealed class Window
+        const int MaxStreams = 4096, MaxSamples = 512;
+        readonly record struct Sample(DateTime Time, ulong Name, bool HasPrefix, bool Long, bool Entropy, bool Txt, bool Nx, bool DgaLexical);
+        sealed class Stream
         {
-            public DateTime Start;
-            public int Count, LongLabels, HighEntropy, Txt, Nx;
-            public readonly HashSet<string> Unique = new HashSet<string>(StringComparer.Ordinal);
+            public DateTime Last, LastDropped;
+            public readonly Queue<Sample> Samples = new();
+            public void Add(Sample sample)
+            {
+                if (sample.Time < Last) { Samples.Clear(); LastDropped = default; }
+                while (Samples.TryPeek(out var oldest) && sample.Time - oldest.Time >= TimeSpan.FromHours(1)) Samples.Dequeue();
+                if (Samples.Count == MaxSamples) LastDropped = Samples.Dequeue().Time;
+                Samples.Enqueue(sample); Last = sample.Time;
+            }
         }
-        readonly object _sync = new object();
-        readonly Dictionary<string, Window> _windows = new Dictionary<string, Window>(StringComparer.Ordinal);
+        readonly object _sync = new();
+        readonly Dictionary<(string Client, string Domain), Stream> _domains = new();
+        readonly Dictionary<string, Stream> _clients = new(StringComparer.Ordinal);
         readonly PublicSuffixes _suffixes;
         public BehavioralAnalyzer(PublicSuffixes suffixes) { _suffixes = suffixes; }
         public static double Entropy(string text)
@@ -60,42 +69,97 @@ namespace DnsServerCore.Security
             if (text.Length == 0) return 0;
             return text.GroupBy(c => c).Sum(g => { double p = (double)g.Count() / text.Length; return -p * Math.Log2(p); });
         }
+        static ulong Fingerprint(string text)
+        {
+            // Store fixed-size fingerprints rather than retaining possible DNS payloads.
+            Span<byte> hash = stackalloc byte[32];
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text), hash);
+            return System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(hash);
+        }
+        static Stream GetStream<TKey>(Dictionary<TKey, Stream> streams, TKey key, DateTime now)
+        {
+            if (streams.TryGetValue(key, out var stream)) return stream;
+            if (streams.Count >= MaxStreams)
+            {
+                foreach (var stale in streams.Where(p => now - p.Value.Last >= TimeSpan.FromHours(1)).Select(p => p.Key).ToArray()) streams.Remove(stale);
+                if (streams.Count >= MaxStreams) streams.Remove(streams.MinBy(p => p.Value.Last).Key);
+            }
+            streams[key] = stream = new Stream(); return stream;
+        }
+        static BehavioralFinding Tunneling(Stream stream, int minutes, DateTime now)
+        {
+            DateTime cutoff = now.AddMinutes(-minutes);
+            var samples = stream.Samples.Where(s => s.Time > cutoff).ToArray();
+            int count = samples.Length;
+            List<ScoreContribution> points = [];
+            int unique = samples.Where(s => s.HasPrefix).Select(s => s.Name).Distinct().Count();
+            bool lexical = count > 0 && (samples.Count(s => s.Long) >= count * .5 || samples.Count(s => s.Entropy) >= count * .5);
+            bool novelty = unique >= 25 && unique >= count * .8;
+            if (count >= 30)
+            {
+                if (samples.Count(s => s.Long) >= count * .5) points.Add(new("LongLabels", 20, "At least half of sampled names have labels of 32 or more characters."));
+                if (samples.Count(s => s.Entropy) >= count * .5) points.Add(new("HighEntropy", 20, "At least half of sampled names have long, high-entropy labels."));
+                if (novelty) points.Add(new("UniqueSubdomains", 25, "At least 25 distinct subdomains account for 80% or more of sampled queries."));
+                if (count >= (minutes == 5 ? 60 : 120)) points.Add(new("QueryVolume", 15, "Elevated query count in the observation window."));
+                if (samples.Count(s => s.Txt) >= count * .5) points.Add(new("TxtRatio", 10, "At least half of sampled queries use TXT; this is supporting evidence only."));
+                if (samples.Count(s => s.Nx) >= count * .5) points.Add(new("NxDomainRatio", 10, "At least half of sampled responses are NXDOMAIN."));
+            }
+            // Lexical and changing-payload evidence must corroborate each other before escalation.
+            int score = Math.Min(100, points.Sum(p => p.Points));
+            if ((!lexical || !novelty) && score > 49)
+            {
+                points.Add(new("CorroborationLimit", 49 - score, "Priority is limited because label structure and changing subdomains do not corroborate."));
+                score = 49;
+            }
+            return new("DnsTunneling", "ClientDomain", score, count, count == 0 ? now : samples[0].Time, minutes, stream.LastDropped > cutoff, points.ToArray());
+        }
+        static BehavioralFinding Dga(Stream stream, DateTime now)
+        {
+            var samples = stream.Samples.ToArray();
+            int count = samples.Length;
+            List<ScoreContribution> points = [];
+            if (count >= 30)
+            {
+                if (samples.Count(s => s.DgaLexical) >= count * .5) points.Add(new("DomainLexical", 20, "At least half of registered domains have long, diverse, high-entropy labels."));
+                if (samples.Select(s => s.Name).Distinct().Count() >= Math.Max(25, count * .8)) points.Add(new("DomainDiversity", 25, "At least 25 distinct registered domains account for 80% or more of sampled queries."));
+                if (samples.Count(s => s.Nx) >= count * .8) points.Add(new("FailedDestinations", 35, "At least 80% of sampled destination lookups return NXDOMAIN."));
+            }
+            // None of these indicators alone classifies a domain generation pattern.
+            int score = points.Count == 3 ? 80 : 0;
+            return new("DgaPattern", "Client", score, count, count == 0 ? now : samples[0].Time, 60, stream.LastDropped > now.AddHours(-1), points.ToArray());
+        }
+        static BehavioralFinding Periodicity(Stream stream, DateTime now)
+        {
+            var samples = stream.Samples.ToArray();
+            List<ScoreContribution> points = [];
+            if (samples.Length >= 20 && samples[^1].Time - samples[0].Time >= TimeSpan.FromMinutes(10) && samples.Count(s => !s.Nx) >= samples.Length * .8)
+            {
+                var intervals = samples.Zip(samples.Skip(1), (a, b) => (b.Time - a.Time).TotalSeconds).ToArray();
+                double mean = intervals.Average();
+                double deviation = Math.Sqrt(intervals.Average(v => (v - mean) * (v - mean)));
+                if (mean >= 10 && deviation / mean <= .1)
+                    points.Add(new("RegularTiming", 35, "Successful lookups repeat at nearly regular intervals; scheduled legitimate software can behave the same way."));
+            }
+            return new("PeriodicDns", "ClientDomain", points.Sum(p => p.Points), samples.Length, samples[0].Time, 60, stream.LastDropped > now.AddHours(-1), points.ToArray());
+        }
         public BehavioralScore Observe(string clientKey, string name, string type, bool nxDomain, DateTime now)
         {
             name = PublicSuffixes.Normalize(name);
             string domain = _suffixes.RegistrableDomain(name);
             string prefix = name.Length > domain.Length ? name[..(name.Length - domain.Length - 1)] : "";
             string longest = prefix.Split('.').OrderByDescending(s => s.Length).First();
-            string key = clientKey + "|" + domain;
+            string registeredLabel = domain.Split('.')[0];
+            bool dga = registeredLabel.Length >= 16 && registeredLabel.Distinct().Count() >= 10 && Entropy(registeredLabel) >= 3.5;
+            Sample sample = new(now, Fingerprint(prefix), prefix.Length > 0, longest.Length >= 32, longest.Length >= 20 && Entropy(longest) >= 4.0, type == "TXT", nxDomain, dga);
             lock (_sync)
             {
-                if (!_windows.TryGetValue(key, out Window window) || now - window.Start >= TimeSpan.FromMinutes(5) || now < window.Start)
-                {
-                    if (_windows.Count >= 4096)
-                    {
-                        foreach (string stale in _windows.Where(p => now - p.Value.Start >= TimeSpan.FromMinutes(5)).Select(p => p.Key).ToArray()) _windows.Remove(stale);
-                        if (_windows.Count >= 4096) _windows.Remove(_windows.MinBy(p => p.Value.Start).Key);
-                    }
-                    window = new Window { Start = now }; _windows[key] = window;
-                }
-                window.Count = Math.Min(1000000, window.Count + 1);
-                if (longest.Length >= 32) window.LongLabels++;
-                if (longest.Length >= 20 && Entropy(longest) >= 4.0) window.HighEntropy++;
-                if (type == "TXT") window.Txt++;
-                if (nxDomain) window.Nx++;
-                if (prefix.Length > 0 && window.Unique.Count < 256) window.Unique.Add(prefix);
-                List<ScoreContribution> points = [];
-                if (window.Count >= 30)
-                {
-                    if ((double)window.LongLabels / window.Count >= .5) points.Add(new("LongLabels", 20, "At least half of sampled names have labels of 32 or more characters."));
-                    if ((double)window.HighEntropy / window.Count >= .5) points.Add(new("HighEntropy", 20, "At least half of sampled names have long, high-entropy labels."));
-                    if (window.Count <= 256 && window.Unique.Count >= 25 && window.Unique.Count >= window.Count * .8) points.Add(new("UniqueSubdomains", 25, "At least 25 distinct subdomains with a high novelty ratio."));
-                    else if (window.Unique.Count == 256) points.Add(new("HighDistinctCount", 20, "At least 256 distinct subdomains; the capped set cannot estimate the full novelty ratio."));
-                    if (window.Count >= 60) points.Add(new("QueryVolume", 15, "At least 60 queries in the five-minute observation window."));
-                    if ((double)window.Txt / window.Count >= .5) points.Add(new("TxtRatio", 10, "At least half of queries use TXT."));
-                    if ((double)window.Nx / window.Count >= .5) points.Add(new("NxDomainRatio", 10, "At least half of responses are NXDOMAIN."));
-                }
-                return new BehavioralScore(Math.Min(100, points.Sum(p => p.Points)), domain, window.Count, window.Start, points.ToArray());
+                var domainStream = GetStream(_domains, (clientKey, domain), now);
+                var clientStream = GetStream(_clients, clientKey, now);
+                domainStream.Add(sample); clientStream.Add(sample with { Name = Fingerprint(domain) });
+                BehavioralFinding[] findings = [Tunneling(domainStream, 5, now), Tunneling(domainStream, 60, now), Dga(clientStream, now), Periodicity(domainStream, now)];
+                // Stable ordering favors the short window when scores tie.
+                var selected = findings.OrderByDescending(f => f.Score).First();
+                return new(selected.Score, domain, selected.Samples, selected.WindowStart, selected.Contributions, "heuristic-v2", "Uncalibrated", findings.Where(f => f.Score > 0).ToArray(), selected.WindowMinutes, selected.SampleLimited);
             }
         }
     }

@@ -2281,6 +2281,7 @@ namespace DnsServerCore
             _webService.MapGetAndPost("/api/security/policy/get", _securityApi.GetPolicy);
             _webService.MapPost("/api/security/policy/set", _securityApi.SetPolicy);
             _webService.MapGetAndPost("/api/security/events/list", _securityApi.Events);
+            _webService.MapPost("/api/security/events/analyze", _securityApi.AnalyzeEvent);
             _webService.MapGetAndPost("/api/security/simulate", _securityApi.Simulate);
             _webService.MapPost("/api/security/signals/ingest", _securityApi.IngestSignals);
             _webService.MapGetAndPost("/api/security/policy/history", _securityApi.History);

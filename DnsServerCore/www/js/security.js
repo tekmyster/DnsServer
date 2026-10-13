@@ -18,6 +18,10 @@ function refreshSecurity() {
         $('#securityDeviceThreshold').val(p.deviceThreshold); $('#securityDeviceDns').val(p.deviceDnsResponse); $('#securityDhcpResponse').val(p.dhcpResponse);
         $('#securityMispEnabled').prop('checked', p.misp.enabled); $('#securityMispUrl').val(p.misp.url);
         $('#securityMispCredential').val(p.misp.apiKeyEnvironment); $('#securityMispRefresh').val(p.misp.refreshSeconds); $('#securityMispLifetime').val(p.misp.cacheLifetimeHours);
+        var llm = p.llm || {};
+        $('#securityLlmEnabled').prop('checked', !!llm.enabled); $('#securityLlmEndpoint').val(llm.endpoint || ''); $('#securityLlmModel').val(llm.model || '');
+        $('#securityLlmCredential').val(llm.apiKeyEnvironment || ''); $('#securityLlmRemote').prop('checked', !!llm.allowRemote); $('#securityLlmDomains').prop('checked', !!llm.shareDomains);
+        $('#securityLlmEnabled, #securityLlmEndpoint, #securityLlmModel, #securityLlmCredential, #securityLlmRemote, #securityLlmDomains').prop('disabled', !sessionData.info.permissions.Administration.canModify);
         $('#securityMispEnabled, #securityMispUrl, #securityMispCredential, #securityMispRefresh, #securityMispLifetime').prop('disabled', !sessionData.info.permissions.Administration.canModify);
         $('#securityHealth').text('MISP: ' + (!p.misp.enabled ? 'Disabled' : data.mispHealth.lastSuccess ? 'Last updated ' + productTime(data.mispHealth.lastSuccess) : 'Awaiting first update') + ' · Shared signals: ' + (data.signalHealth.status.indexOf('failed') >= 0 ? 'Sync interrupted' : data.signalHealth.lastSuccess ? 'Last delivery completed' : 'Local evidence available'));
         $('#securityHealthDetails').text('Policy revision: ' + p.revision + ' · Cached indicators: ' + data.mispHealth.indicators + ' · Dropped event deliveries: ' + data.droppedEvents + ' · MISP status: ' + data.mispHealth.status + ' · Signal status: ' + data.signalHealth.status);
@@ -49,6 +53,7 @@ function saveSecuritySettings() {
         enabled: $('#securityEnabled').prop('checked'), mode: $('#securityMode').val(), inspectAuthoritative: $('#securityAuthoritative').prop('checked'),
         alertThreshold: Number($('#securityAlertThreshold').val()), deviceThreshold: Number($('#securityDeviceThreshold').val()),
         deviceDnsResponse: $('#securityDeviceDns').val(), dhcpResponse: $('#securityDhcpResponse').val(),
+        llm: { enabled: $('#securityLlmEnabled').prop('checked'), endpoint: $('#securityLlmEndpoint').val(), model: $('#securityLlmModel').val(), apiKeyEnvironment: $('#securityLlmCredential').val(), allowRemote: $('#securityLlmRemote').prop('checked'), shareDomains: $('#securityLlmDomains').prop('checked') },
         misp: { enabled: $('#securityMispEnabled').prop('checked'), url: $('#securityMispUrl').val(), apiKeyEnvironment: $('#securityMispCredential').val(), refreshSeconds: Number($('#securityMispRefresh').val()), cacheLifetimeHours: Number($('#securityMispLifetime').val()) }
     });
     submitSecurityPolicy(policy);
@@ -96,9 +101,33 @@ function securityShowEvidence(event) {
         output.append($('<h5>').text('Matched indicators')).append(matches);
     }
     if (event.behavior) {
-        output.append($('<h5>').text('Behavior score: ' + event.behavior.score + ' / 100'));
-        var contributions = $('<ul>'); event.behavior.contributions.forEach(function (c) { contributions.append($('<li>').text(c.points + ' points · ' + c.evidence)); }); output.append(contributions);
-        output.append($('<p>').addClass('text-muted').text('Heuristic score; detection accuracy has not been calibrated.'));
+        var behavior = event.behavior;
+        output.append($('<h5>').text('Behavior score: ' + behavior.score + ' / 100'));
+        productDetails(output, [['Observation window', (behavior.windowMinutes || 5) + ' minutes'], ['Samples', behavior.samples], ['Baseline', 'No learned baseline'], ['Coverage', behavior.sampleLimited ? 'Sample limit reached' : 'Retained observations']]);
+        var findings = behavior.findings || [{ contributions: behavior.contributions, windowMinutes: 5 }];
+        var names = { DnsTunneling: 'Possible DNS tunneling', DgaPattern: 'Possible generated domains', PeriodicDns: 'Periodic DNS activity' };
+        findings.slice().sort(function (a, b) { return (b.score || 0) - (a.score || 0); }).forEach(function (finding, index) {
+            var section = output;
+            if (index > 0) { section = $('<details>'); section.append($('<summary>').text((names[finding.kind] || 'Additional finding') + ' - ' + finding.windowMinutes + ' minutes')); output.append(section); }
+            if (finding.kind) section.append($('<h5>').text((names[finding.kind] || 'Behavioral finding') + ' · ' + finding.windowMinutes + ' minutes · ' + finding.score + ' / 100'));
+            if (finding.scope === 'Client') section.append($('<p>').text('Based on this client’s queries across multiple domains.'));
+            if (finding.sampleLimited) section.append($('<p>').text('Only the latest 512 observations are included in this finding.'));
+            var contributions = $('<ul>'); (finding.contributions || []).forEach(function (c) { contributions.append($('<li>').text(c.points + ' points · ' + c.evidence)); }); section.append(contributions);
+        });
+        output.append($('<p>').addClass('text-muted').text('Heuristic priority; detection accuracy has not been calibrated.'));
+    }
+    if (ddiSecurityPolicy && ddiSecurityPolicy.llm && ddiSecurityPolicy.llm.enabled && sessionData.info.permissions.Administration.canModify) {
+        var analysis = $('<div>').attr('role', 'status').attr('aria-live', 'polite');
+        var explain = $('<button>').attr('type', 'button').addClass('btn btn-default').text('Explain event');
+        explain.on('click', function () {
+            explain.prop('disabled', true); analysis.empty().text('Analyzing event…');
+            securityRequest('events/analyze', 'POST', { eventId: event.id }, function (response) {
+                var result = response.response.analysis;
+                analysis.empty().append($('<h5>').text('Model explanation')).append($('<p>').text(result.summary).css('white-space', 'pre-wrap')).append($('<p>').addClass('text-muted').text('Advisory · ' + result.model + ' · ' + productTime(result.timestamp)));
+                explain.prop('disabled', false);
+            }, function () { analysis.empty().text('Analysis unavailable. Check the model connection and try again.'); explain.prop('disabled', false); });
+        });
+        output.append(explain).append(analysis);
     }
     if (event.additionalMatches) output.append($('<p>').text(event.additionalMatches + ' additional indicator matches.'));
     output.append($('<details>').append($('<summary>').text('Developer data')).append($('<pre>').text(JSON.stringify(event, null, 2))));

@@ -1,3 +1,11 @@
+# Tectanium DDI
+
+![Tectanium](docs/branding/tectanium-preview.png)
+
+An open source DDI fork built on Technitium DNS Server, adding shared DHCP allocation, IPAM and shared DNS/DHCP security evidence. See the [feature matrix](docs/FEATURE-MATRIX.md) for current capabilities and qualification limits, and the [logo assets](docs/branding/README.md) for preserved originals and variants.
+
+## Upstream DNS engine overview
+
 <p align="center">
 	<a href="https://technitium.com/dns/">
 		<img src="https://technitium.com/img/logo.png" alt="Technitium DNS Server" /><br />

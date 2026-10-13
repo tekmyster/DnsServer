@@ -283,8 +283,8 @@ $(function () {
 
     var headerHtml = $("#header").html();
 
-    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/logo25x25.png\" alt=\"Technitium Logo\" /><span class=\"text\" style=\"color: #ffffff;\">Technitium</span></a>" + headerHtml + "</div>");
-    $("#footer").html("<div class=\"content\"><a href=\"https://technitium.com/\" target=\"_blank\">Technitium</a> | <a href=\"https://blog.technitium.com/\" target=\"_blank\">Blog</a> | <a href=\"https://go.technitium.com/?id=35\" target=\"_blank\">Donate</a> | <a href=\"https://dnsclient.net/\" target=\"_blank\">DNS Client</a> | <a href=\"https://github.com/TechnitiumSoftware/DnsServer\" target=\"_blank\"><i class=\"fa fa-github\"></i>&nbsp;GitHub</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
+    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/tectanium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">Tectanium</span></a>" + headerHtml + "</div>");
+    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/DnsServer\" target=\"_blank\">Tectanium source</a> | <a href=\"https://github.com/tekmyster/DnsServer/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
 
     loadQuickBlockLists();
     loadQuickForwardersList();
@@ -1164,7 +1164,7 @@ function updateDnsSettingsDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.uptimestamp = responseJSON.response.uptimestamp; //update timestamp since server may have restarted during current session
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "Technitium DNS Server v" + responseJSON.response.version;
+    document.title = responseJSON.response.dnsServerDomain + " - " + "Tectanium DDI · DNS engine v" + responseJSON.response.version;
     $("#lblAboutVersion").text(responseJSON.response.version);
     $("#lblAboutUptime").text(moment(responseJSON.response.uptimestamp).local().format("lll") + " (" + moment(responseJSON.response.uptimestamp).fromNow() + ")");
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);
@@ -3227,7 +3227,7 @@ function initTheme() {
     }
 
     const currentTheme = localStorage.getItem("theme");
-    changeTheme(currentTheme);
+    changeTheme(currentTheme == null ? "dark" : currentTheme);
 }
 
 function changeTheme(newTheme) {

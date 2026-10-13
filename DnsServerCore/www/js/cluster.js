@@ -106,7 +106,7 @@ function updateAdminClusterDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.clusterDomain = responseJSON.response.clusterDomain;
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "Technitium DNS Server v" + responseJSON.response.version;
+    document.title = responseJSON.response.dnsServerDomain + " - " + "Tectanium DDI · DNS engine v" + responseJSON.response.version;
     $("#lblAboutVersion").text(responseJSON.response.version);
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);
 }

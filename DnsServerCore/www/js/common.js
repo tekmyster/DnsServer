@@ -213,7 +213,7 @@ function showRequestError(response, showInnerError, placeholder) {
         target.find('.alert').append($('<details>').append($('<summary>').text('Technical details')).append($('<pre>').text(message + (showInnerError && response.innerErrorMessage ? '\n' + response.innerErrorMessage : ''))));
     }
 }
-function showAlert(type, title, message, objAlertPlaceholder) {
+function showAlert(type, title, message, objAlertPlaceholder, persistent) {
     message = String(message || '').replace(/^Please enter a value for /, 'Enter ').replace(/^Please enter /, 'Enter ');
     var titles = { 'Error!': 'Unable to complete action', 'Missing!': 'Required value', 'Invalid Character!': 'Invalid value', 'Success!': 'Done', 'Warning!': 'Review required', 'Invalid Response!': 'Response unavailable' };
     title = titles[title] || String(title || '').replace(/!$/, '');
@@ -227,7 +227,7 @@ function showAlert(type, title, message, objAlertPlaceholder) {
 
     objAlertPlaceholder.html(alertHTML);
 
-    if (type == "success") {
+    if (type == "success" && persistent !== true) {
         setTimeout(function () {
             hideAlert(objAlertPlaceholder);
         }, 5000);

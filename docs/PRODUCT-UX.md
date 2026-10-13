@@ -55,3 +55,5 @@ Verification for this pass:
 - The existing 311 DDI checks passed. Production access controls and credentials were not changed. Existing isolated access tests retain original sessions through fresh authentication and privilege checks on loopback; other source paths remain untested.
 
 This verification does not exercise every record subtype, destructive operation, authentication provider, configured external integration or third-party application's settings. Those workflows keep their existing validation and permissions and require their own deployment-specific execution checks. Continue the mandatory quality gate as features change.
+
+Backup/migration verification: readable backup choices, a named New Deployment dialog, package preview and desktop/390-pixel layouts were inspected. Browser import confirmed success feedback, refreshed settings and disabled replay controls; initial focus moves to the package input. ZIP responses and rollback are tested through native API fixtures. Browser Blob-download filesystem completion was not observable through the in-app automation event.

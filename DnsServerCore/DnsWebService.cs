@@ -718,6 +718,7 @@ namespace DnsServerCore
 
                 if (dnsSettings)
                 {
+                    if (!isConfigTransfer) _dnsServer.SaveConfigFile(true);
                     // IPAM intent travels with shared settings. Export a coherent snapshot under its own lock.
                     ZipArchiveEntry ipamEntry = backupZip.CreateEntry("ipam.json");
                     using (Stream ipamStream = ipamEntry.Open())
@@ -824,12 +825,12 @@ namespace DnsServerCore
                     }
                     else
                     {
-                        //backup zone files
-                        string[] zoneFiles = Directory.GetFiles(Path.Combine(_configFolder, "zones"), "*.zone", SearchOption.TopDirectoryOnly);
-                        foreach (string zoneFile in zoneFiles)
+                        // Include acknowledged runtime edits even when their delayed disk save is pending.
+                        foreach (AuthZoneInfo zone in _dnsServer.AuthZoneManager.GetZones(_ => true))
                         {
-                            string entryName = "zones/" + Path.GetFileName(zoneFile);
-                            backupZip.CreateEntryFromFile(zoneFile, entryName);
+                            using var encoded = new MemoryStream(); _dnsServer.AuthZoneManager.WriteZoneTo(zone.Name, encoded); encoded.Position = 0;
+                            using Stream entry = backupZip.CreateEntry("zones/" + zone.Name.ToLowerInvariant() + ".zone").Open();
+                            await encoded.CopyToAsync(entry);
                         }
                     }
                 }
@@ -917,12 +918,9 @@ namespace DnsServerCore
 
                 if (scopes && !isConfigTransfer)
                 {
-                    string[] scopeFiles = Directory.GetFiles(Path.Combine(_configFolder, "scopes"), "*.scope", SearchOption.TopDirectoryOnly);
-                    foreach (string scopeFile in scopeFiles)
-                    {
-                        string entryName = "scopes/" + Path.GetFileName(scopeFile);
-                        backupZip.CreateEntryFromFile(scopeFile, entryName);
-                    }
+                    foreach (Scope scope in _dhcpServer.Scopes.Values)
+                    { using var encoded = new MemoryStream(); scope.WriteTo(encoded); encoded.Position = 0; using Stream entry = backupZip.CreateEntry("scopes/" + scope.Name + ".scope").Open(); await encoded.CopyToAsync(entry); }
+
                 }
 
                 if (stats && !isConfigTransfer)
@@ -2267,6 +2265,9 @@ namespace DnsServerCore
             _webService.MapGetAndPost("/api/settings/temporaryDisableBlocking", _settingsApi.TemporaryDisableBlocking);
             _webService.MapGetAndPost("/api/settings/backup", _settingsApi.BackupSettingsAsync);
             _webService.MapPost("/api/settings/restore", _settingsApi.RestoreSettingsAsync);
+            _webService.MapGetAndPost("/api/settings/migration/export", ExportMigrationAsync);
+            _webService.MapPost("/api/settings/migration/preview", PreviewMigrationAsync);
+            _webService.MapPost("/api/settings/migration/import", ImportMigrationAsync);
 
             // IPAM intent uses POST mutations and the existing authenticated API pipeline.
             _webService.MapGetAndPost("/api/ipam/list", _ipamApi.List);
@@ -2523,6 +2524,7 @@ namespace DnsServerCore
                 case "/api/allowed/export":
                 case "/api/blocked/export":
                 case "/api/settings/backup":
+                case "/api/settings/migration/export":
                 case "/api/logs/download":
                 case "/api/logs/export":
                 case "/api/admin/cluster/primary/transferConfig":

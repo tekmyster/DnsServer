@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Numerics;
 
+if (args.Contains("--migration")) { await MigrationChecks.Run(args.Contains("--serve")); return; }
+
 if (args.Contains("--transport")) { await DistributedTransportChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--api") || args.Contains("--serve")) { await ApiChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--security")) { await SecurityChecks.Run(); return; }

@@ -56,6 +56,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <script src="js/ddi.js"></script>
     <script src="js/logs.js"></script>
     <script src="js/product-ux.js"></script>
+    <script src="js/migration.js"></script>
 </head>
 <body>
     <div id="header">
@@ -2482,6 +2483,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                                                 <div class="pull-right">
                                                     <button id="btnShowBackupSettingsModal" type="button" class="btn btn-success" onclick="resetBackupSettingsModal();" data-toggle="modal" data-target="#modalBackupSettings">Backup Settings</button>
                                                     <button id="btnShowRestoreSettingsModal" type="button" class="btn btn-warning" onclick="resetRestoreSettingsModal();" data-toggle="modal" data-target="#modalRestoreSettings" style="margin-left: 6px;">Restore Settings</button>
+                                                    <button type="button" class="btn btn-default" style="margin-left: 6px;" onclick="openDdiMigration();">New Deployment</button>
                                                 </div>
                                                 <div class="clearfix"></div>
                                             </div>
@@ -6672,6 +6674,25 @@ MII...
     </div>
 
 
+
+    <div id="modalDdiMigration" class="modal fade" tabindex="-1" role="dialog" aria-labelledby="ddiMigrationTitle">
+        <div class="modal-dialog" role="document"><div class="modal-content">
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button><h4 id="ddiMigrationTitle" class="modal-title">New Deployment</h4></div>
+            <div class="modal-body">
+                <div id="ddiMigrationAlert" role="status" aria-live="polite"></div>
+                <p>Export from the source, then import on a new standalone server.</p>
+                <button id="ddiMigrationExport" class="btn btn-default" type="button" data-loading-text="Preparing..." onclick="exportDdiMigration();">Download Package</button>
+                <hr>
+                <div class="form-group"><label for="ddiMigrationFile">Migration package</label><input id="ddiMigrationFile" class="form-control" type="file" accept=".zip,application/zip" onchange="resetDdiMigrationReview();"><p class="help-block">ZIP file up to 16 MiB. Existing Technitium backups can supply zones and DHCP scopes.</p></div>
+                <button id="ddiMigrationPreview" class="btn btn-default" type="button" data-loading-text="Checking..." onclick="previewDdiMigration();">Preview Import</button>
+                <div id="ddiMigrationReview" hidden style="margin-top: 15px;"><dl class="dl-horizontal"><dt>DNS zones</dt><dd id="ddiMigrationZones"></dd><dt>DHCP scopes</dt><dd id="ddiMigrationScopes"></dd><dt>DNS settings</dt><dd id="ddiMigrationDns"></dd><dt>IPAM</dt><dd id="ddiMigrationIpam"></dd><dt>Security policy</dt><dd id="ddiMigrationSecurity"></dd><dt>Package integrity</dt><dd id="ddiMigrationIntegrity"></dd></dl>
+                <p>DHCP scopes stay disabled. Destination credentials, listening addresses and cluster identity are retained. Distributed ownership requires a separate transfer.</p></div>
+                <details style="margin-top: 15px;"><summary>What travels</summary><p>Packages include DNS records and keys, resolver and filtering settings, DHCP options and lease snapshots, IPAM and security policy. Applications, external integrations and histories need separate setup or backups. Lease snapshots do not authorize serving clients while the source remains active.</p></details>
+            </div>
+            <div class="modal-footer"><button id="ddiMigrationImport" type="button" class="btn btn-primary" disabled data-loading-text="Importing..." onclick="importDdiMigration();">Import Package</button><button class="btn btn-default" type="button" data-dismiss="modal">Close</button></div>
+        </div></div>
+    </div>
+
     <div id="modalBackupSettings" class="modal fade" tabindex="-1" role="dialog">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
@@ -6682,62 +6703,62 @@ MII...
                 <div class="modal-body">
                     <div id="divBackupSettingsAlert"></div>
 
-                    <p>The backup process will create a zip file for the items selected below:</p>
+                    <p>Select the data to include in the backup.</p>
 
                     <div class="form-horizontal">
                         <div class="form-group">
                             <div style="padding-left: 40px;">
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupAuthConfig" type="checkbox" checked> Authentication Config File (auth.config)
+                                        <input id="chkBackupAuthConfig" type="checkbox" checked> Users and permissions
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupClusterConfig" type="checkbox" checked> Cluster Config File (cluster.config)
+                                        <input id="chkBackupClusterConfig" type="checkbox" checked> Cluster identity
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupWebServiceConfig" type="checkbox" checked> Web Service Config And Certificate File (webservice.config, *.pfx &amp; *.p12)
+                                        <input id="chkBackupWebServiceConfig" type="checkbox" checked> Console settings and certificates
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupDnsConfig" type="checkbox" checked> DNS Config And Certificate File (dns.config, *.pfx &amp; *.p12)
+                                        <input id="chkBackupDnsConfig" type="checkbox" checked> DNS settings and DDI data
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupLogConfig" type="checkbox" checked> Log Config File (log.config)
+                                        <input id="chkBackupLogConfig" type="checkbox" checked> Logging settings
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupZones" type="checkbox" checked> DNS Zone Files (*.zone)
+                                        <input id="chkBackupZones" type="checkbox" checked> DNS zones and keys
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupAllowedZones" type="checkbox" checked> Allowed Zones File (allowed.config)
+                                        <input id="chkBackupAllowedZones" type="checkbox" checked> Allowed domains
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupBlockedZones" type="checkbox" checked> Blocked Zones File (blocked.config)
+                                        <input id="chkBackupBlockedZones" type="checkbox" checked> Blocked domains
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupBlockLists" type="checkbox" checked> Block List Config And Cache Files (blocklist.config)
+                                        <input id="chkBackupBlockLists" type="checkbox" checked> Block lists
                                     </label>
                                 </div>
 
@@ -6749,28 +6770,28 @@ MII...
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupScopes" type="checkbox" checked> DHCP Scope Files (*.scope)
+                                        <input id="chkBackupScopes" type="checkbox" checked> DHCP scopes and leases
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupStats" type="checkbox" checked> Dashboard Stats Files (*.stat, *.dstat)
+                                        <input id="chkBackupStats" type="checkbox" checked> Dashboard history
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkBackupLogs" type="checkbox"> Log Files (*.log)
+                                        <input id="chkBackupLogs" type="checkbox"> Logs
                                     </label>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <p><b>Note!</b> The Web Service or Optional Protocols TLS certificate (.pfx or .p12) files will be included in the backup only if they exist within the DNS Server's config folder.</p>
+                    <p>Certificates stored outside the configuration folder require a separate backup.</p>
 
-                    <p><b>Note!</b> It may take several minutes to generate the backup zip file if log files are selected to be backed up which will depend on the size of the log files on the disk.</p>
+                    <p>Backups can contain credentials, private keys and client data. Store them securely.</p>
 
                 </div>
                 <div class="modal-footer">
@@ -6799,61 +6820,61 @@ MII...
                             </div>
                         </div>
 
-                        <p>The restore process will restore all the selected items from the backup zip file:</p>
+                        <p>Select the data to restore from the backup.</p>
 
                         <div class="form-group">
                             <div style="padding-left: 40px;">
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreAuthConfig" type="checkbox" checked> Authentication Config File (auth.config)
+                                        <input id="chkRestoreAuthConfig" type="checkbox" checked> Users and permissions
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreClusterConfig" type="checkbox" checked> Cluster Config File (cluster.config)
+                                        <input id="chkRestoreClusterConfig" type="checkbox" checked> Cluster identity
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreWebServiceConfig" type="checkbox" checked> Web Service Config And Certificate File (webservice.config, *.pfx &amp; *.p12)
+                                        <input id="chkRestoreWebServiceConfig" type="checkbox" checked> Console settings and certificates
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreDnsConfig" type="checkbox" checked> DNS Config And Certificate File (dns.config, *.pfx &amp; *.p12)
+                                        <input id="chkRestoreDnsConfig" type="checkbox" checked> DNS settings and DDI data
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreLogConfig" type="checkbox" checked> Log Config File (log.config)
+                                        <input id="chkRestoreLogConfig" type="checkbox" checked> Logging settings
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreZones" type="checkbox" checked> DNS Zone Files (*.zone)
+                                        <input id="chkRestoreZones" type="checkbox" checked> DNS zones and keys
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreAllowedZones" type="checkbox" checked> Allowed Zones File (allowed.config)
+                                        <input id="chkRestoreAllowedZones" type="checkbox" checked> Allowed domains
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreBlockedZones" type="checkbox" checked> Blocked Zones File (blocked.config)
+                                        <input id="chkRestoreBlockedZones" type="checkbox" checked> Blocked domains
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreBlockLists" type="checkbox" checked> Block List Config And Cache Files (blocklist.config)
+                                        <input id="chkRestoreBlockLists" type="checkbox" checked> Block lists
                                     </label>
                                 </div>
 
@@ -6865,19 +6886,19 @@ MII...
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreScopes" type="checkbox" checked> DHCP Scope Files (*.scope)
+                                        <input id="chkRestoreScopes" type="checkbox" checked> DHCP scopes and leases
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreStats" type="checkbox" checked> Dashboard Stats Files (*.stat, *.dstat)
+                                        <input id="chkRestoreStats" type="checkbox" checked> Dashboard history
                                     </label>
                                 </div>
 
                                 <div class="checkbox">
                                     <label>
-                                        <input id="chkRestoreLogs" type="checkbox"> Log Files (*.log)
+                                        <input id="chkRestoreLogs" type="checkbox"> Logs
                                     </label>
                                 </div>
                             </div>

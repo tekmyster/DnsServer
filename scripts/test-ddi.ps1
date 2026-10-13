@@ -9,7 +9,7 @@ if (-not $SkipBuild) {
     dotnet build $testProject -c Release --nologo -v quiet
     if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
 }
-foreach ($testMode in @('', '--dhcp', '--netbox', '--transport', '--api', '--security', '--security-ops')) {
+foreach ($testMode in @('', '--dhcp', '--netbox', '--transport', '--api', '--security', '--security-ops', '--migration')) {
     if ($testMode) { dotnet run --project $testProject -c Release --no-build -- $testMode }
     else { dotnet run --project $testProject -c Release --no-build }
     if ($LASTEXITCODE -ne 0) { throw "DDI checks failed: $testMode" }

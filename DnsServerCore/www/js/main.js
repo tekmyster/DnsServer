@@ -901,7 +901,7 @@ function loadQuickForwardersListFrom(responseJSON) {
     $("#optQuickForwarders").html(htmlList);
 }
 
-function refreshDnsSettings() {
+function refreshDnsSettings(keepFeedback) {
     var divDnsSettingsLoader = $("#divDnsSettingsLoader");
     var divDnsSettings = $("#divDnsSettings");
 
@@ -914,6 +914,7 @@ function refreshDnsSettings() {
     HTTPRequest({
         url: "api/settings/get?node=" + encodeURIComponent(node),
         token: sessionData.token,
+        dontHideAlert: keepFeedback === true,
         success: function (responseJSON) {
             if ((node == "") || (node == "cluster") || (node == sessionData.info.dnsServerDomain))
                 updateDnsSettingsDataAndGui(responseJSON);
@@ -3093,13 +3094,11 @@ function backupSettings(objBtn) {
     HTTPRequest({
         url: "api/user/createSingleUseToken",
         token: sessionData.token,
-        success: function (responseJSON) {
-            btn.button("reset");
-
-            window.open("api/settings/backup?token=" + responseJSON.response.token + "&authConfig=" + authConfig + "&clusterConfig=" + clusterConfig + "&webServiceSettings=" + webServiceSettings + "&dnsSettings=" + dnsSettings + "&logSettings=" + logSettings + "&zones=" + zones + "&allowedZones=" + allowedZones + "&blockedZones=" + blockedZones + "&blockLists=" + blockLists + "&apps=" + apps + "&scopes=" + scopes + "&stats=" + stats + "&logs=" + logs + "&node=" + encodeURIComponent(node) + "&ts=" + (new Date().getTime()), "_blank");
-
-            $("#modalBackupSettings").modal("hide");
-            showAlert("success", "Backed Up!", "Settings were backed up successfully.");
+        success: async function (responseJSON) {
+            var url = "api/settings/backup?token=" + responseJSON.response.token + "&authConfig=" + authConfig + "&clusterConfig=" + clusterConfig + "&webServiceSettings=" + webServiceSettings + "&dnsSettings=" + dnsSettings + "&logSettings=" + logSettings + "&zones=" + zones + "&allowedZones=" + allowedZones + "&blockedZones=" + blockedZones + "&blockLists=" + blockLists + "&apps=" + apps + "&scopes=" + scopes + "&stats=" + stats + "&logs=" + logs + "&node=" + encodeURIComponent(node);
+            if (await downloadDdiArchive(url, btn, divBackupSettingsAlert, "ddi-backup.zip")) {
+                $("#modalBackupSettings").modal("hide"); showAlert("success", "Backup ready", "The archive is ready to save.");
+            }
         },
         error: function () {
             btn.button("reset");

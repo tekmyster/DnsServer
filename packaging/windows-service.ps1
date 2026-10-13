@@ -32,7 +32,7 @@ if ($Check) { exit 0 }
 New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
 $created = $false
 try {
-    New-Service -Name $serviceName -DisplayName 'Tectanium DDI Server' -BinaryPathName ('"' + $executable + '" "' + $dataPath + '"') -StartupType Automatic | Out-Null
+    New-Service -Name $serviceName -DisplayName 'Tectanium DDI Server' -BinaryPathName ('"' + $executable + '" "' + $dataPath + '"') -StartupType Manual | Out-Null
     $created = $true
     # Use LocalService with this service's own SID for configuration access. Never start as LocalSystem.
     $configured = Invoke-CimMethod -InputObject (Get-CimInstance Win32_Service -Filter "Name='$serviceName'") -MethodName Change -Arguments @{StartName='NT AUTHORITY\LocalService';StartPassword=''}
@@ -73,6 +73,7 @@ try {
         } catch { Start-Sleep -Seconds 1 }
     }
     if (-not $ready) { throw 'The service did not pass a fresh administrative login and settings check.' }
+    Set-Service -Name $serviceName -StartupType Automatic
     Write-Output "Installed. Console: http://127.0.0.1:$ConsolePort/. Initial admin credential: $passwordPath"
 } catch {
     if ($created) { Stop-Service -Name $serviceName -ErrorAction SilentlyContinue; & sc.exe delete $serviceName | Out-Null }

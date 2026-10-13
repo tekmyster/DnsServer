@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Numerics;
 
+if (args.Length > 0 && (args[0] == "--package" || args[0] == "--prepare-package")) { await PackageChecks.Run(args); return; }
+
 if (args.Contains("--migration")) { await MigrationChecks.Run(args.Contains("--serve")); return; }
 
 if (args.Contains("--transport")) { await DistributedTransportChecks.Run(args.Contains("--serve")); return; }

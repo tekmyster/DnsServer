@@ -53,6 +53,7 @@ static class ApiChecks
             Check(denied.GetProperty("status").GetString() == "invalid-token", "Unauthenticated access was allowed");
             var login = await Call(original, "/api/user/login", ("user", "admin"), ("pass", password), ("includeInfo", "true"));
             Check(login.GetProperty("status").GetString() == "ok", "Admin authentication failed");
+            Check(login.GetProperty("info").GetProperty("productVersion").GetString() == "0.1.0-alpha.2" && login.GetProperty("info").GetProperty("version").GetString() == "15.6.1", "Product alpha version changed engine compatibility identity");
             // Login responses have a top-level token; keep this session open throughout validation.
             string token = login.GetProperty("token").GetString();
             original.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);

@@ -67,6 +67,7 @@ namespace DnsServerCore
             {
                 //info
                 jsonWriter.WriteString("version", _dnsWebService.GetServerVersion());
+                jsonWriter.WriteString("productVersion", _dnsWebService.ProductVersion);
                 jsonWriter.WriteString("uptimestamp", _dnsWebService._uptimestamp);
 
                 jsonWriter.WriteBoolean("clusterInitialized", _dnsWebService._clusterManager.ClusterInitialized);

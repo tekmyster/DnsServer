@@ -1,0 +1,19 @@
+services:
+  tectanium:
+    image: tectanium-ddi:0.1.0-alpha.2
+    ports:
+      - "127.0.0.1:5380:5380/tcp"
+      - "53:53/tcp"
+      - "53:53/udp"
+    environment:
+      DNS_SERVER_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+    secrets:
+      - admin_password
+    volumes:
+      - configuration:/etc/dns
+    restart: unless-stopped
+secrets:
+  admin_password:
+    file: ./admin-password.txt
+volumes:
+  configuration:

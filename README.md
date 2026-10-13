@@ -4,36 +4,55 @@
 
 Open-source DNS, DHCP and IP address management from Tekmyster, with shared security evidence and optional local model assistance.
 
-[Download the alpha](https://github.com/tekmyster/Tectanium-DDI-Server/releases/tag/v0.1.0-alpha.1) · [Feature status](docs/FEATURE-MATRIX.md) · [Report an issue](https://github.com/tekmyster/Tectanium-DDI-Server/issues) · [Tekmyster](https://tekmyster.com)
+**Current version: 0.1.0-alpha.2.** Evaluate the alpha in an isolated deployment. See [feature status](docs/FEATURE-MATRIX.md) for implemented capabilities and remaining work.
+
+[Download packages](https://github.com/tekmyster/Tectanium-DDI-Server/releases) · [Installation](packaging/INSTALL.md) · [Report an issue](https://github.com/tekmyster/Tectanium-DDI-Server/issues) · [Tekmyster](https://tekmyster.com)
 
 ## Downloads
 
-The published release is **0.1.0-alpha.1**. It includes a self-contained [Linux x64 package](https://github.com/tekmyster/Tectanium-DDI-Server/releases/download/v0.1.0-alpha.1/Tectanium-v0.1.0-alpha.1-linux-x64.tar.gz) and [SHA256SUMS](https://github.com/tekmyster/Tectanium-DDI-Server/releases/download/v0.1.0-alpha.1/SHA256SUMS).
+| Platform | Package |
+| --- | --- |
+| Windows x64 | Setup ZIP or self-contained portable ZIP |
+| Linux x64 / ARM64 | Self-contained tar.gz and systemd installer |
+| Windows / Linux / macOS / Raspberry Pi | Portable ZIP or tar.gz; requires the .NET 10 ASP.NET Core Runtime |
+| Docker | Loadable Linux x64 image archive and Compose example |
 
-Windows setup, additional portable packages and the next alpha are being prepared. They are not available in this release yet. Evaluate the alpha in an isolated deployment before replacing an existing DNS/DHCP service.
+Release downloads include SHA256SUMS. The installers use separate Tectanium services and configuration directories, generate an initial admin credential, and leave host DNS and firewall settings unchanged. Windows setup is unsigned. Existing deployments require the [backup and migration workflow](docs/BACKUP-MIGRATION.md); the alpha installers do not replace them automatically.
 
 ## Console
 
-Tectanium uses a charcoal console with dedicated DNS, DHCP, IPAM and Security sections. This screenshot shows the isolated lab; it is not production telemetry.
+The screenshots below show an isolated demonstration with example data.
 
-![Tectanium console in the isolated lab](docs/screenshots/tectanium-dashboard.png)
+![Tectanium IP address inventory](docs/screenshots/ipam.jpg)
+
+![Tectanium security evidence](docs/screenshots/security.jpg)
+
+![Tectanium About page](docs/screenshots/about.jpg)
 
 ## Capabilities
 
 - Authoritative and recursive DNS, DNSSEC and encrypted DNS transports.
-- Distributed IPv4 DHCP allocation and synchronization across multiple owners, with durable offers/leases and fenced recovery tested in the Hyper-V lab.
+- Distributed IPv4 DHCP allocation and synchronization across multiple owners, with durable offers/leases and fenced recovery in the Hyper-V lab.
 - IPv4/IPv6 IPAM inventory, network views, assignments, utilization and DNS/DHCP reconciliation.
 - Reviewed publication of managed prefixes and addresses to NetBox.
 - Local threat indicators, asynchronous MISP enrichment, shared DNS/DHCP evidence and analyst investigations.
 - Explainable tunneling and DGA-pattern suspicion, periodic DNS observations and visible sampling limits.
-- Optional Chat Completions-compatible event explanations. Separately operated model servers can use local GPUs; explanations are advisory and cannot change protection.
+- Optional Chat Completions-compatible event explanations, including separately operated local GPU model servers. Explanations are advisory and cannot change protection.
 - Native configuration backups, migration previews and policy rollback.
 
-Predictive intelligence, trained classifiers, learned baselines, DHCPv6 and several HA/IPAM workflows remain in development. See [the feature matrix](docs/FEATURE-MATRIX.md) and [security roadmap](docs/SECURITY-ROADMAP.md) for implementation and validation limits.
+Predictive intelligence, trained classifiers, learned baselines, DHCPv6 and several HA/IPAM workflows remain in development. Read [the feature matrix](docs/FEATURE-MATRIX.md) and [security roadmap](docs/SECURITY-ROADMAP.md) before planning a deployment.
+
+## App stores
+
+In Apps, open **App stores** and select **Technitium** to use its existing in-console catalog, or **Tectanium** to visit [tectanium.tekmyster.com](https://tectanium.tekmyster.com). ZIP installation remains available.
+
+![App store choices](docs/screenshots/app-stores.jpg) The Tectanium portal entry does not imply that a hosted catalog has been deployed or verified.
 
 ## Documentation
 
+- [Build from source](build.md)
 - [HTTP API](APIDOCS.md)
+- [Environment variables](DockerEnvironmentVariables.md)
 - [IPAM](docs/IPAM.md)
 - [DHCP synchronization](docs/DHCP-SYNCHRONIZATION.md)
 - [Backup and migration](docs/BACKUP-MIGRATION.md)
@@ -43,4 +62,4 @@ Predictive intelligence, trained classifiers, learned baselines, DHCPv6 and seve
 
 ## License
 
-Tectanium is distributed under [GNU GPL v3](LICENSE). Original copyright and required attribution are preserved in source headers and [third-party notices](THIRD-PARTY-NOTICES.md).
+Tectanium is distributed under [GNU GPL v3](LICENSE). Original copyright and required attribution are preserved in source headers and [third-party notices](THIRD-PARTY-NOTICES.md). Product versioning is independent of the retained engine compatibility identity used by existing APIs, applications and cluster checks.

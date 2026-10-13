@@ -65,20 +65,8 @@ namespace DnsServerApp
                 if (!isPortableApp)
                     isPortableApp = configFolder is null; //no config folder specified so run as portable app
 
-                Uri updateCheckUri;
-
-                switch (Environment.OSVersion.Platform)
-                {
-                    case PlatformID.Win32NT:
-                        updateCheckUri = new Uri("https://go.technitium.com/?id=41");
-                        break;
-
-                    default:
-                        updateCheckUri = new Uri("https://go.technitium.com/?id=42");
-                        break;
-                }
-
-                service = new DnsWebService(isPortableApp, configFolder, updateCheckUri);
+                // Tectanium releases must not redirect users to an upstream installer.
+                service = new DnsWebService(isPortableApp, configFolder);
                 await service.StartAsync(throwIfBindFails);
 
                 Console.CancelKeyPress += delegate (object? sender, ConsoleCancelEventArgs e)
@@ -109,7 +97,7 @@ namespace DnsServerApp
                 else
                     serviceUrl = $"http://{Environment.MachineName.ToLowerInvariant()}:{service.WebServiceHttpPort}";
 
-                Console.WriteLine($"Technitium DNS Server v{service.Version} was started successfully.\r\nStarted on: {service.UpTimeStamp.ToLocalTime()} Local Time\r\nUsing config folder: {service.ConfigFolder}\r\n\r\nNote: Open {serviceUrl} in web browser to access web console.\r\n\r\nPress [CTRL + C] to stop...");
+                Console.WriteLine($"Tectanium DDI Server {service.ProductVersion} was started successfully.\r\nStarted on: {service.UpTimeStamp.ToLocalTime()} Local Time\r\nUsing config folder: {service.ConfigFolder}\r\n\r\nNote: Open {serviceUrl} in web browser to access web console.\r\n\r\nPress [CTRL + C] to stop...");
 
                 waitHandle.WaitOne();
             }
@@ -120,12 +108,12 @@ namespace DnsServerApp
             }
             finally
             {
-                Console.WriteLine("\r\nTechnitium DNS Server is stopping...");
+                Console.WriteLine("\r\nTectanium DDI Server is stopping...");
 
                 service?.Dispose();
                 psr?.Dispose();
 
-                Console.WriteLine("Technitium DNS Server was stopped successfully.");
+                Console.WriteLine("Tectanium DDI Server was stopped successfully.");
                 exitHandle.Set();
             }
         }

@@ -3192,6 +3192,8 @@ namespace DnsServerCore
         public string ConfigFolder
         { get { return _configFolder; } }
 
+        public string ProductVersion => typeof(DnsWebService).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "Development";
+
         public string Version
         { get { return GetCleanVersion(_currentVersion); } }
 

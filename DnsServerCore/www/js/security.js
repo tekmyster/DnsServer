@@ -75,13 +75,17 @@ function refreshSecurityEvents() {
         var events = $('#securityEventsBody').empty();
         response.response.events.slice().reverse().forEach(function (event) {
             var row = $('<tr>');
-            [productTime(event.timestamp), event.node, event.service, event.clientAddress || (event.device ? event.device.hardwareAddress : ''), event.query, productLabel(event.action),
-                event.behavior ? event.behavior.score + ' / 100' : '', event.device ? event.device.scope + ' / ' + (event.device.hostName || 'Unknown hostname') : 'Attribution unavailable', productReason(event.reason)].forEach(function (v, index) { row.append(index === 8 ? $('<td>').append($('<span>').addClass('ux-summary-text').text(v)) : $('<td>').text(v)); });
+            [productTime(event.timestamp), event.service, event.clientAddress || (event.device ? event.device.hardwareAddress : ''), event.query || 'Lease request', productLabel(event.action),
+                event.behavior ? event.behavior.score + ' / 100' : ''].forEach(function (v, index) {
+                    var cell = $('<td>').text(v);
+                    if (index === 3) cell.css({ 'max-width': '260px', 'overflow-wrap': 'anywhere', 'white-space': 'normal' });
+                    row.append(cell);
+                });
             var evidence = $('<td>');
             evidence.append($('<button class="btn btn-xs btn-default">').text('View evidence').on('click', function () { securityShowEvidence(event); }));
             row.append(evidence); events.append(row);
         });
-        productEmptyRow(events, 10, 'No recent security events.');
+        productEmptyRow(events, 7, 'No recent security events.');
         var signals = $('#securitySignalsBody').empty();
         response.response.signals.forEach(function (signal) {
             var row = $('<tr>');

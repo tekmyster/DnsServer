@@ -5,10 +5,10 @@
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 		<Authors>Shreyas Zare</Authors>
-		<Company>Technitium</Company>
-		<Product>Technitium DNS Server</Product>
+		<Company>Tectanium contributors</Company>
+		<Product>Tectanium DDI Server</Product>
 		<PackageProjectUrl>https://technitium.com/dns/</PackageProjectUrl>
-		<RepositoryUrl>https://github.com/TechnitiumSoftware/DnsServer</RepositoryUrl>
+		<RepositoryUrl>https://github.com/tekmyster/Tectanium-DDI-Server</RepositoryUrl>
 		<RepositoryType></RepositoryType>
 		<Description></Description>
 		<PackageId>DnsServer</PackageId>

@@ -6,7 +6,7 @@ This is a developing open-source DDI fork. Features have no paid software tier, 
 
 | Requested capability | Current behavior | Remaining requirements |
 | --- | --- | --- |
-| Technitium fork and baseline | Upstream engines retained; repeatable Release build; fork and draft PR | Immutable Linux packaging with manifests implemented; upgrades, compatibility and production qualification remain |
+| Tectanium baseline | Upstream engines retained; repeatable Release build; fork and draft PR | Immutable Linux packaging with manifests implemented; upgrades, compatibility and production qualification remain |
 | Multi-server DHCP allocation | Balanced disjoint scattered sequences, stable identities, exclusions, initial reservations, directory-synchronized Linux offer/ACK journals; three abrupt ACK power-cut tests passed | Broader crash-point/platform qualification; live membership/range/reservation migration and controller consensus |
 | More than two synchronized servers | All enrolled peers exchange sequenced snapshots over HTTPS; revisioned scope options reconcile from the primary; reachable peers continue during coordinator outage; three live local servers validated | Regional deployment, enrollment/DANE and scale qualification |
 | Disconnected service | Owners use their unchanged sequences and previously granted capacity | Broader fencing providers, clock-bound qualification and unrecoverable donor recovery |

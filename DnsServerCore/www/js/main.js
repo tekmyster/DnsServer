@@ -663,7 +663,7 @@ $(function () {
 
 function showAbout() {
     if ($("#pageLogin").is(":visible")) {
-        window.open("https://technitium.com/aboutus.html", "_blank");
+        window.open("https://tekmyster.com", "_blank");
     }
     else {
         $("#mainPanelTabListDashboard").removeClass("active");
@@ -1164,8 +1164,8 @@ function updateDnsSettingsDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.uptimestamp = responseJSON.response.uptimestamp; //update timestamp since server may have restarted during current session
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "Tectanium DDI · DNS engine v" + responseJSON.response.version;
-    $("#lblAboutVersion").text(responseJSON.response.version);
+    document.title = responseJSON.response.dnsServerDomain + " - " + "Tectanium DDI Server · " + (responseJSON.response.productVersion || "Development");
+    $("#lblAboutVersion").text(responseJSON.response.productVersion || "Development");
     $("#lblAboutUptime").text(moment(responseJSON.response.uptimestamp).local().format("lll") + " (" + moment(responseJSON.response.uptimestamp).fromNow() + ")");
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);
 }

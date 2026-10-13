@@ -60,6 +60,7 @@ namespace DnsServerCore
             private void WriteClusterState(Utf8JsonWriter jsonWriter, bool includeServerIpAddresses = false)
             {
                 jsonWriter.WriteString("version", _dnsWebService.GetServerVersion());
+                jsonWriter.WriteString("productVersion", _dnsWebService.ProductVersion);
                 jsonWriter.WriteString("dnsServerDomain", _dnsWebService._dnsServer.ServerDomain);
                 jsonWriter.WriteBoolean("clusterInitialized", _dnsWebService._clusterManager.ClusterInitialized);
 

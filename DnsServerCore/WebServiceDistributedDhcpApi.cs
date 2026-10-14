@@ -351,12 +351,12 @@ namespace DnsServerCore
                     scope = new Scope(bytes, _log, _dhcpServer);
                     if (scope.Enabled || scope.Name != plan.Scope) throw new ArgumentException("Bootstrap scope must remain disabled.");
                     if (!scope.CanInitializeAllocation) throw new ArgumentException("Bootstrap cannot import active leases or offers.");
-                    var candidate = scope.BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners) with { Configuration = plan.Configuration, HaGroups = plan.HaGroups };
+                    var candidate = scope.BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners, plan.Algorithm) with { Configuration = plan.Configuration, HaGroups = plan.HaGroups };
                     if (JsonSerializer.Serialize(candidate, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(plan, DistributedAllocation.JsonOptions)) throw new InvalidOperationException("Bootstrap scope and ownership disagree.");
                     await _dhcpServer.AddScopeAsync(scope);
                 }
                 if (!scope.CanInitializeAllocation || _allocation.NativeHolds(scope.Name).Length > 0) throw new InvalidOperationException("Disable and drain the scope before joining allocation ownership.");
-                var expected = scope.BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners) with { Configuration = plan.Configuration, HaGroups = plan.HaGroups };
+                var expected = scope.BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners, plan.Algorithm) with { Configuration = plan.Configuration, HaGroups = plan.HaGroups };
                 if (JsonSerializer.Serialize(expected, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(plan, DistributedAllocation.JsonOptions)) throw new InvalidOperationException("Scope addressing does not match coordinator ownership.");
             }
             var localConfigurations = (_allocation.Snapshot().Configurations ?? []).ToDictionary(c => c.Scope);

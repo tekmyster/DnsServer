@@ -93,13 +93,23 @@ static class DistributedDhcpChecks
         void Check(bool value, string reason) { if (!value) throw new Exception(reason); passed++; }
         void Reject(Action action, string reason) { try { action(); } catch (ArgumentException) { passed++; return; } catch (InvalidOperationException) { passed++; return; } catch (InvalidDataException) { passed++; return; } catch (IOException) { passed++; return; } throw new Exception(reason); }
         uint Ip(string address) => AllocationSequence.Number(IPAddress.Parse(address));
-        var plan = new AllocationPlan("lab", Guid.NewGuid().ToString("N"), Ip("192.0.2.1"), Ip("192.0.2.120"), "repeatable-seed", ["east-a", "east-b", "west-a"], [new(Ip("192.0.2.4"), Ip("192.0.2.8")), new(Ip("192.0.2.7"), Ip("192.0.2.10"))]);
+        var plan = new AllocationPlan("lab", Guid.NewGuid().ToString("N"), Ip("192.0.2.1"), Ip("192.0.2.120"), "repeatable-seed", ["east-a", "east-b", "west-a"], [new(Ip("192.0.2.4"), Ip("192.0.2.8")), new(Ip("192.0.2.7"), Ip("192.0.2.10"))], Algorithm: "interleaved-v1");
         try
         {
             await CheckUdpListenerLifecycle(folder, Check);
             await CheckCrashBoundaries(folder, Check);
             await CheckLiveBootstrap(folder, Check, Reject);
             var sequence = new AllocationSequence(plan);
+            var literalPlan = plan with { Last = Ip("192.0.2.9"), Excluded = [] };
+            var literal = new AllocationSequence(literalPlan);
+            for (int owner = 0; owner < 3; owner++)
+                Check(literal.Candidates(plan.Owners[owner]).SequenceEqual(Enumerable.Range(0, 3).Select(i => Ip("192.0.2.1") + (uint)(owner + i * 3))), "Literal 1,4,7 / 2,5,8 / 3,6,9 pattern differs");
+            Check(new AllocationSequence(literalPlan with { Seed = "different" }).Candidates("east-a").SequenceEqual(literal.Candidates("east-a")), "Interleaved dynamic ownership depends on seed");
+            Check(new AllocationSequence(plan).Candidates("east-a").Take(4).SequenceEqual(new[] { Ip("192.0.2.1"), Ip("192.0.2.11"), Ip("192.0.2.14"), Ip("192.0.2.17") }), "Exclusions shift eligible ranks incorrectly");
+            var legacyPlan = literalPlan with { Algorithm = null };
+            string legacyJson = System.Text.Json.JsonSerializer.Serialize(legacyPlan, DistributedAllocation.JsonOptions);
+            Check(!legacyJson.Contains("algorithm") && new AllocationSequence(System.Text.Json.JsonSerializer.Deserialize<AllocationPlan>(legacyJson, DistributedAllocation.JsonOptions)).Candidates("east-a").SequenceEqual(new AllocationSequence(legacyPlan).Candidates("east-a")), "Legacy serialized authority changes algorithm");
+            Reject(() => new AllocationSequence(plan with { Algorithm = "unknown" }), "Unknown algorithm silently changes authority");
             var selections = plan.Owners.Select(owner => sequence.Candidates(owner).ToArray()).ToArray();
             Check(selections.Sum(s => s.Length) == 113 && selections.SelectMany(s => s).Distinct().Count() == 113, "Ownership is not exhaustive and disjoint");
             Check(selections.Max(s => s.Length) - selections.Min(s => s.Length) <= 1, "Sequences are not balanced");
@@ -267,6 +277,7 @@ static class DistributedDhcpChecks
             {
                 var offers = await Task.WhenAll(Offer(scopeA, i), Offer(scopeB, (byte)(i + 10)), Offer(scopeC, (byte)(i + 20)));
                 Check(offers.All(o => o is not null), "One of three isolated servers cannot serve its own sequence"); allOffers.AddRange(offers);
+                for (int owner = 0; owner < 3; owner++) Check(AllocationSequence.Number(offers[owner].Address) == Ip("198.51.100.10") + (uint)((i - 1) * 3 + owner), "Actual isolated offer changes its original interleaved sequence");
             }
             Check(allOffers.Select(o => o.Address).Distinct().Count() == 12, "Actual DHCP offer hooks duplicated an address across three isolated owners");
             await serverB.AddScopeAsync(scopeB); scopeB.SetEnabled(true);
@@ -311,6 +322,14 @@ static class DistributedDhcpChecks
             Check((await Offer(overflowScopeA, 35)).Address.Equals(overflow.Address), "Disconnected borrower lost its existing granted offer");
             overflowScopeA.ObservePeerSelection((DhcpMessage)Discover(35));
             Check(storeA.FindOffer("overflow", "1-020000000023") is null && await Offer(overflowScopeA, 35) is null, "Selecting another server leaves a held offer or delayed duplicate offer");
+            Check(await Offer(overflowScopeA, 37) is not null, "Previously granted capacity cannot be reused after offer release");
+            serverA.BorrowCapacity = async (_, borrower) =>
+            {
+                overflowScopeA.ObservePeerSelection((DhcpMessage)Discover(31));
+                return await overflowScopeB.GrantCapacityAsync(borrower, Guid.NewGuid().ToString("N"));
+            };
+            var releasedDuringBorrow = await Offer(overflowScopeA, 36);
+            Check(releasedDuringBorrow?.Address.Equals(IPAddress.Parse("203.0.113.10")) == true, "Offer uses overflow despite local capacity released during donor I/O");
             await using (var security = new DnsServerCore.Security.DdiSecurityManager(Path.Combine(folder, "ack-risk-security"), new DnsServerCore.Security.PublicSuffixes(["example"])))
             using (var ackScope = new Scope("ack-risk", false, IPAddress.Parse("10.0.0.10"), IPAddress.Parse("10.0.0.20"), IPAddress.Parse("255.255.255.0"), log, serverA) { DnsUpdates = false, IgnoreClientIdentifierOption = true })
             {

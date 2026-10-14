@@ -1121,7 +1121,7 @@ namespace DnsServerCore.Dhcp
             _dhcpServer.Allocation?.ProtectNative(_name, new(AllocationSequence.Number(offer.Address), offer.ClientIdentifier.ToString(), BitConverter.ToString(offer.HardwareAddress), offer.HostName, "Offer", offer.LeaseObtained.AddSeconds(OFFER_EXPIRY_SECONDS)));
         }
 
-        public AllocationPlan BuildAllocationPlan(string epoch, string seed, string[] owners)
+        public AllocationPlan BuildAllocationPlan(string epoch, string seed, string[] owners, string algorithm = "interleaved-v1")
         {
             var excluded = (_exclusions ?? []).Select(e => new AllocationRange(AllocationSequence.Number(e.StartingAddress), AllocationSequence.Number(e.EndingAddress))).ToList();
             foreach (var address in new[] { _networkAddress, _broadcastAddress, _routerAddress }.Where(a => a is not null))
@@ -1129,10 +1129,10 @@ namespace DnsServerCore.Dhcp
             var reservations = _reservedLeases.Values.Select(l => new AllocationReservation(AllocationSequence.Number(l.Address), l.ClientIdentifier.ToString())).OrderBy(r => r.Address).ToArray();
             if (reservations.Length > 0 && !_ignoreClientIdentifierOption) throw new InvalidOperationException("Distributed reservations currently require hardware-based client identifiers.");
             foreach (var reservation in reservations) excluded.Add(new(reservation.Address, reservation.Address));
-            return new(_name, epoch, AllocationSequence.Number(_startingAddress), AllocationSequence.Number(_endingAddress), seed, owners.Order(StringComparer.Ordinal).ToArray(), excluded.OrderBy(e => e.First).ThenBy(e => e.Last).ToArray(), AllocationSequence.Number(_subnetMask), reservations);
+            return new(_name, epoch, AllocationSequence.Number(_startingAddress), AllocationSequence.Number(_endingAddress), seed, owners.Order(StringComparer.Ordinal).ToArray(), excluded.OrderBy(e => e.First).ThenBy(e => e.Last).ToArray(), AllocationSequence.Number(_subnetMask), reservations, Algorithm: algorithm);
         }
         internal bool MatchesAllocationPlan(AllocationPlan plan)
-        { return System.Text.Json.JsonSerializer.Serialize(plan with { Configuration = null, HaGroups = null }, DistributedAllocation.JsonOptions) == System.Text.Json.JsonSerializer.Serialize(BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners), DistributedAllocation.JsonOptions); }
+        { return System.Text.Json.JsonSerializer.Serialize(plan with { Configuration = null, HaGroups = null }, DistributedAllocation.JsonOptions) == System.Text.Json.JsonSerializer.Serialize(BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners, plan.Algorithm), DistributedAllocation.JsonOptions); }
         public int DistributedOfferDelayMilliseconds
         {
             get
@@ -1292,6 +1292,10 @@ namespace DnsServerCore.Dhcp
                     byte[] donorState;
                     try { donorState = await _dhcpServer.BorrowCapacity(_name, store.NodeName()); }
                     finally { await _lastAddressOfferedLock.WaitAsync(); }
+                    // A release may have made local capacity available while donor I/O
+                    // ran outside the mutex. Prefer that capacity before overflow.
+                    foreach (uint candidate in sequence.Candidates(store.NodeName()))
+                    { var selected = await TryAddress(candidate); if (selected is not null) return selected; }
                     if (donorState is not null)
                     {
                         store.Merge(donorState);

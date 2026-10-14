@@ -16,7 +16,8 @@ namespace DnsServerCore.Dhcp
     public sealed record AllocationRange(uint First, uint Last);
     public sealed record AllocationReservation(uint Address, string Client);
     public sealed record DhcpHaGroup(string Name, string Region, string Primary, string Secondary);
-    public sealed record AllocationPlan(string Scope, string Epoch, uint First, uint Last, string Seed, string[] Owners, AllocationRange[] Excluded, uint Mask = 0, AllocationReservation[] Reservations = null, string Configuration = null, DhcpHaGroup[] HaGroups = null);
+    public sealed record AllocationPlan(string Scope, string Epoch, uint First, uint Last, string Seed, string[] Owners, AllocationRange[] Excluded, uint Mask = 0, AllocationReservation[] Reservations = null, string Configuration = null, DhcpHaGroup[] HaGroups = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string Algorithm = null);
     public sealed record AllocationProtection(string State, DateTime Expires);
     public sealed record AllocationEntry(uint Address, string Client, string Hardware, string Host, string State, DateTime Expires, string GrantId = null, string Borrower = null, string AuthorityOwner = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AllocationProtection Protection = null);
@@ -43,6 +44,7 @@ namespace DnsServerCore.Dhcp
         public ulong Count { get; }
         public AllocationSequence(AllocationPlan plan)
         {
+            if (plan?.Algorithm is not null && plan.Algorithm != "interleaved-v1") throw new ArgumentException("Unknown allocation algorithm.");
             if (plan is null || string.IsNullOrWhiteSpace(plan.Scope) || plan.Scope.Length > 255 || !Guid.TryParseExact(plan.Epoch, "N", out _) || string.IsNullOrEmpty(plan.Seed) || plan.Seed.Length > 255 || plan.First > plan.Last || plan.Owners is null || plan.Owners.Length < 1 || plan.Owners.Length > 128 || plan.Owners.Any(n => string.IsNullOrWhiteSpace(n) || n.Length > 255) || plan.Owners.Distinct(StringComparer.Ordinal).Count() != plan.Owners.Length || plan.Excluded is null || plan.Excluded.Length > 10000)
                 throw new ArgumentException("Invalid allocation plan.");
             _owners = plan.Owners.Order(StringComparer.Ordinal).ToArray();
@@ -65,6 +67,9 @@ namespace DnsServerCore.Dhcp
             _ranges = ranges.ToArray(); Count = _ranges.Aggregate(0UL, (n, r) => n + (ulong)r.Last - r.First + 1);
             if (Count == 0 && _reserved.Count > 0) { _multiplier = 1; _offset = 0; _inverse = 0; return; }
             if (Count < (ulong)_owners.Length) throw new ArgumentException("The pool needs at least one eligible address per owner.");
+            // Eligible ranks 0,N,2N... belong to the first sorted owner. Membership
+            // stays immutable during an outage. Missing Algorithm retains legacy maps.
+            if (plan.Algorithm == "interleaved-v1") { _multiplier = 1; _offset = 0; _inverse = Count == 1 ? 0UL : 1UL; return; }
             byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(plan.Seed));
             _offset = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(hash.AsSpan(0, 8)) % Count;
             ulong multiplier = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(hash.AsSpan(8, 8)) % Count;

@@ -1,6 +1,7 @@
 using DnsServerCore;
 using DnsServerCore.Cluster;
 using DnsServerCore.Dhcp;
+using DnsServerCore.Dhcp.Options;
 using DnsServerCore.Dns;
 using DnsServerCore.HttpApi;
 using System.Net;
@@ -37,10 +38,19 @@ static class DistributedTransportChecks
     sealed class PinnedHandler : HttpClientHandler
     {
         public bool Disconnected;
+        public string LoseMigrationResponse;
         public PinnedHandler(X509Certificate2 certificate)
         { string expected = certificate.GetCertHashString(System.Security.Cryptography.HashAlgorithmName.SHA256); ServerCertificateCustomValidationCallback = (_, actual, _, _) => actual is not null && actual.GetCertHashString(System.Security.Cryptography.HashAlgorithmName.SHA256) == expected; }
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        { if (Disconnected) throw new HttpRequestException("Simulated disconnected replication link"); return base.SendAsync(request, cancellationToken); }
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (Disconnected) throw new HttpRequestException("Simulated disconnected replication link");
+            var response = await base.SendAsync(request, cancellationToken);
+            if (LoseMigrationResponse is not null && request.RequestUri.AbsolutePath.EndsWith("/migration/" + LoseMigrationResponse, StringComparison.Ordinal))
+            {
+                LoseMigrationResponse = null; response.Dispose(); throw new HttpRequestException("Migration response lost after remote durable processing");
+            }
+            return response;
+        }
     }
     static T Field<T>(object instance, string name) => (T)instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(instance);
     static async Task<JsonElement> Call(HttpClient client, string path, params (string Key, string Value)[] fields)
@@ -117,6 +127,7 @@ static class DistributedTransportChecks
                 Check((await Call(fresh, "/api/ddi/dhcp/state/get")).GetProperty("status").GetString() == "ok", "Fresh administrator lacks DHCP view access");
                 Check((await Call(fresh, "/api/dhcp/scopes/set", ("name", "Default"), ("domainName", "lab.example"))).GetProperty("status").GetString() == "ok", "Fresh administrator lacks DHCP modify access");
             }
+            await CheckLiveMigration(services, originals, freshAdmins, tlsClients, names, disconnected => links[(0, 2)].Disconnected = disconnected, action => links[(0, 2)].LoseMigrationResponse = action, Check);
             var bootstrap = await Call(originals[0], "/api/ddi/dhcp/plan/set", ("scope", "Default"), ("owners", string.Join(',', names)));
             Check(bootstrap.GetProperty("status").GetString() == "ok", "Live TLS bootstrap failed: " + bootstrap);
             var stores = services.Select(s => Field<DistributedAllocation>(s, "_allocation")).ToArray();
@@ -164,7 +175,7 @@ static class DistributedTransportChecks
             await (Task)synchronize.Invoke(services[1], [CancellationToken.None]); await (Task)synchronize.Invoke(services[2], [CancellationToken.None]);
             Check(services.Skip(1).All(s => Field<DhcpServer>(s, "_dhcpServer").GetScope("Default").DomainName == "updated.lab.example" && Field<DhcpServer>(s, "_dhcpServer").GetScope("Default").LeaseTimeHours == 2), "Shared scope options do not synchronize over actual HTTPS");
             Check(services.All(s => !Field<DhcpServer>(s, "_dhcpServer").GetScope("Default").Enabled), "Configuration synchronization activated a local DHCP listener");
-            Check(stores.All(s => s.Snapshot().Configurations?.Single().Revision >= 1), "Applied configuration revisions are missing");
+            Check(stores.All(s => s.Snapshot().Configurations?.Single(configuration => configuration.Scope == "Default").Revision >= 1), "Applied configuration revisions are missing");
             Field<DhcpServer>(services[1], "_dhcpServer").GetScope("Default").DomainName = "local-drift.example";
             await (Task)synchronize.Invoke(services[1], [CancellationToken.None]);
             Check(Field<DhcpServer>(services[1], "_dhcpServer").GetScope("Default").DomainName == "updated.lab.example", "Equal-revision desired configuration does not reconcile local option drift");
@@ -228,5 +239,184 @@ static class DistributedTransportChecks
             foreach (var pair in originalEnvironment) Environment.SetEnvironmentVariable(pair.Key, pair.Value);
             if (Path.GetDirectoryName(folder) != Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)) throw new Exception("Unexpected lab directory"); Directory.Delete(folder, true);
         }
+    }
+    static async Task CheckLiveMigration(List<DnsWebService> services, List<HttpClient> originals, List<HttpClient> admins, List<HttpClient> peers, string[] names, Action<bool> disconnectLast, Action<string> loseLastResponse, Action<bool, string> check)
+    {
+        var servers = services.Select(service => Field<DhcpServer>(service, "_dhcpServer")).ToArray();
+        var stores = services.Select(service => Field<DistributedAllocation>(service, "_allocation")).ToArray();
+        var scopes = servers.Select((server, index) => new Scope("Live", false, IPAddress.Parse("127.0.0.10"), IPAddress.Parse("127.0.0.90"), IPAddress.Parse("255.255.255.0"), Field<LogManager>(services[index], "_log"), server)
+        { DnsUpdates = false, PingCheckEnabled = false, IgnoreClientIdentifierOption = true, DomainName = "migration.lab.example", LeaseTimeDays = index == 0 ? (ushort)5 : (ushort)1 }).ToArray();
+        for (int index = 0; index < servers.Length; index++) await servers[index].AddScopeAsync(scopes[index]);
+        DhcpMessage Packet(byte client, byte type = 1, IPAddress address = null)
+        {
+            byte[] wire = new byte[244]; wire[0] = 1; wire[1] = 1; wire[2] = 6; wire[7] = client; wire[28] = 2; wire[33] = client;
+            address?.GetAddressBytes().CopyTo(wire, 12);
+            new byte[] { 99, 130, 83, 99, 53, 1, type, 255 }.CopyTo(wire, 236);
+            return new DhcpMessage(new MemoryStream(wire));
+        }
+        Lease lease = await scopes[0].GetOfferAsync(Packet(71)); scopes[0].CommitLease(lease);
+        DateTime acknowledgedExpiry = lease.LeaseExpires;
+        Lease dormant = await scopes[1].GetOfferAsync(Packet(71)); scopes[1].CommitLease(dormant);
+        check(lease.Address.Equals(dormant.Address), "Dormant peer fixture lacks matching residual evidence");
+        Lease offer = await scopes[0].GetOfferAsync(Packet(72));
+        Lease declined = await scopes[0].GetOfferAsync(Packet(73)); scopes[0].DeclineLease(declined);
+        using (var configuration = new MemoryStream())
+        {
+            scopes[0].WriteTo(configuration, false, false); configuration.Position = 0;
+            using var restarted = new Scope(configuration, Field<LogManager>(services[0], "_log"), servers[0]);
+            check(restarted.GetExistingLeaseOrOffer(Packet(72))?.Address.Equals(offer.Address) == true, "Native restart loses a durably advertised offer");
+            check((await restarted.GetOfferAsync(Packet(71)))?.LeaseExpires == lease.LeaseExpires, "Native restart loses acknowledged client lifetime");
+            restarted.BlockLocallyAdministeredMacAddresses = true;
+            check(await restarted.GetOfferAsync(Packet(71)) is null && await restarted.GetOfferAsync(Packet(72)) is null, "Durable native recovery bypasses existing hardware policy");
+            restarted.BlockLocallyAdministeredMacAddresses = false;
+            var afterRestart = await restarted.GetOfferAsync(Packet(74));
+            check(afterRestart is not null && !afterRestart.Address.Equals(lease.Address) && !afterRestart.Address.Equals(offer.Address) && !afterRestart.Address.Equals(declined.Address), "Native restart reallocates an unknown active binding or quarantine");
+            restarted.ReleaseLease(afterRestart);
+        }
+        var dns = services[0].DnsServer; var originalForwarders = dns.Forwarders;
+        using (var dnsGate = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        using (var sender = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        using (var receiver = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            dnsGate.Bind(new IPEndPoint(IPAddress.Loopback, 0)); sender.Bind(new IPEndPoint(IPAddress.Loopback, 0)); receiver.Bind(new IPEndPoint(lease.Address, 68));
+            dns.Forwarders = [NameServerAddress.Parse("127.0.0.1:" + ((IPEndPoint)dnsGate.LocalEndPoint).Port)];
+            scopes[0].NtpServerDomainNames = ["ack-race-" + Guid.NewGuid().ToString("N") + ".example.net"];
+            scopes[0].SetEnabled(true);
+            typeof(Scope).GetField("_interfaceAddress", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(scopes[0], IPAddress.Loopback);
+            byte[] query = new byte[4096];
+            var waitingQuery = dnsGate.ReceiveFromAsync(query.AsMemory(), SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), deadline.Token);
+            var process = typeof(DhcpServer).GetMethod("ProcessDhcpRequestAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+            var acknowledgement = (Task)process.Invoke(servers[0], [Packet(71, 3, lease.Address), new IPEndPoint(lease.Address, 68), default(IPPacketInformation), sender]);
+            try
+            {
+                var receivedQuery = await waitingQuery;
+                check(!acknowledgement.IsCompleted, "ACK fixture is not stalled in a real options lookup");
+                scopes[0].SetEnabled(false);
+                var capture = scopes[0].CaptureNativeAllocationAsync(names[0], deadline.Token);
+                check(!capture.IsCompleted && scopes[0].MigrationCapturing, "Capture crosses an in-flight native ACK");
+                check((await Call(admins[0], "/api/dhcp/scopes/set", ("name", "Live"), ("domainName", "raced.example"))).GetProperty("status").GetString() == "error", "Edit crosses in-flight ACK capture");
+                query[2] = 0x81; query[3] = 0x83;
+                await dnsGate.SendToAsync(query.AsMemory(0, receivedQuery.ReceivedBytes), SocketFlags.None, receivedQuery.RemoteEndPoint, deadline.Token);
+                await acknowledgement.WaitAsync(deadline.Token);
+                byte[] reply = new byte[4096]; int received = await receiver.ReceiveAsync(reply.AsMemory(), SocketFlags.None, deadline.Token);
+                var ack = new DhcpMessage(new MemoryStream(reply, 0, received));
+                check(ack.DhcpMessageType.Type == DhcpMessageType.Ack && ack.YourClientIpAddress.Equals(lease.Address), "Native UDP ACK was not delivered before capture completed");
+                var captured = await capture;
+                acknowledgedExpiry = captured.Entries.Where(entry => entry.State == "Lease" && entry.Address == AllocationSequence.Number(ack.YourClientIpAddress) && entry.Client == lease.ClientIdentifier.ToString()).Max(entry => entry.Expires);
+                check(acknowledgedExpiry == scopes[0].GetExistingLeaseOrOffer(Packet(71)).LeaseExpires, "Capture loses the exact last in-flight ACK lifetime");
+            }
+            finally
+            {
+                scopes[0].SetEnabled(false); scopes[0].NtpServerDomainNames = null; dns.Forwarders = originalForwarders;
+                await acknowledgement.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        lease = scopes[0].GetExistingLeaseOrOffer(Packet(71));
+        check((await Call(originals[0], "/api/ddi/dhcp/migration/check", ("scope", "Live"))).GetProperty("status").GetString() == "error", "Plain HTTP can initiate live migration");
+        check((await Call(peers[0], "/api/ddi/dhcp/migration/preview", ("scope", "Live"), ("id", Guid.NewGuid().ToString("N")))).GetProperty("status").GetString() == "error", "Service token can initiate administrator migration");
+        check((await Call(admins[1], "/api/ddi/dhcp/migration/check", ("scope", "Live"))).GetProperty("status").GetString() == "error", "Secondary can coordinate live migration");
+        var compatibility = await Call(admins[0], "/api/ddi/dhcp/migration/check", ("scope", "Live"));
+        check(compatibility.GetProperty("status").GetString() == "ok", "Pre-pause eligibility check fails for matching peers: " + compatibility);
+        scopes[2].ChangeNetwork(IPAddress.Parse("127.0.0.10"), IPAddress.Parse("127.0.0.91"), IPAddress.Parse("255.255.255.0"));
+        check((await Call(admins[0], "/api/ddi/dhcp/migration/check", ("scope", "Live"))).GetProperty("status").GetString() == "error", "Eligibility drift is ignored before pausing");
+        scopes[2].ChangeNetwork(IPAddress.Parse("127.0.0.10"), IPAddress.Parse("127.0.0.90"), IPAddress.Parse("255.255.255.0"));
+        using (var blocker = scopes[0].BeginAdministrativeChange())
+        {
+            using var cancellation = new CancellationTokenSource();
+            var capture = scopes[0].CaptureNativeAllocationAsync(names[0], cancellation.Token);
+            check(!capture.IsCompleted && scopes[0].MigrationCapturing, "Capture does not wait for an admitted edit");
+            check((await Call(admins[0], "/api/dhcp/scopes/set", ("name", "Live"), ("domainName", "raced.example"))).GetProperty("status").GetString() == "error", "Edit crosses capture admission barrier");
+            check((await Call(admins[0], "/api/dhcp/scopes/enable", ("name", "Live"))).GetProperty("status").GetString() == "error", "Enable crosses capture admission barrier");
+            check((await Call(admins[0], "/api/dhcp/scopes/delete", ("name", "Live"))).GetProperty("status").GetString() == "error", "Delete crosses capture admission barrier");
+            check((await Call(admins[0], "/api/dhcp/scopes/set", ("name", "Live"), ("newName", "Replaced"))).GetProperty("status").GetString() == "error", "Rename replaces a captured scope");
+            try
+            {
+                await services[0].RestoreConfigAsync(new MemoryStream(), false, false, false, false, false, false, false, false, false, false, true, false, false, false);
+                throw new Exception("Scope restore crossed capture admission barrier");
+            }
+            catch (InvalidOperationException) { check(scopes[0].MigrationCapturing && ReferenceEquals(servers[0].GetScope("Live"), scopes[0]), "Rejected scope restore mutates captured native authority"); }
+            cancellation.Cancel();
+            try { await capture; throw new Exception("Cancelled capture completed"); } catch (OperationCanceledException) { }
+            check(!scopes[0].MigrationCapturing && stores[0].Plan("Live") is null, "Cancelled capture leaves a phantom prepared migration");
+        }
+        string migrationId = Guid.NewGuid().ToString("N");
+        var preview = await Call(admins[0], "/api/ddi/dhcp/migration/preview", ("scope", "Live"), ("id", migrationId));
+        check(preview.GetProperty("status").GetString() == "ok", "Native migration HTTPS preview failed: " + preview);
+        var input = preview.GetProperty("response").GetProperty("state").Deserialize<AllocationBootstrapInput>(DistributedAllocation.JsonOptions);
+        string Hash(AllocationBootstrapInput migration) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(migration, DistributedAllocation.JsonOptions)));
+        Task<JsonElement> Prepare(AllocationBootstrapInput migration) => Call(admins[0], "/api/ddi/dhcp/migration/prepare", ("migration", JsonSerializer.Serialize(migration, DistributedAllocation.JsonOptions)), ("expectedHash", Hash(migration)));
+        scopes[0].DomainName = "changed-after-review.example";
+        check((await Prepare(input)).GetProperty("status").GetString() == "error" && stores[0].Plan("Live") is null, "Stale options prepare initial authority");
+        scopes[0].DomainName = "migration.lab.example";
+        scopes[2].SetEnabled(true);
+        check((await Prepare(input)).GetProperty("status").GetString() == "error" && stores[2].Plan("Live") is null && stores[0].BootstrapPending("Live"), "Enabled peer is prepared or partial preparation is rolled back unsafely");
+        scopes[2].SetEnabled(false);
+        disconnectLast(true);
+        check((await Prepare(input)).GetProperty("status").GetString() == "error", "Lost prepare delivery pretends success");
+        disconnectLast(false);
+        loseLastResponse("stage");
+        check((await Prepare(input)).GetProperty("status").GetString() == "error" && stores[2].BootstrapPending("Live") && !stores[0].Bootstrap("Live").PreparedNodes.Contains(names[2]), "Lost stage response invents receipt or removes remote preparation");
+        string authorityPath = Field<string>(stores[0], "_path");
+        await stores[0].DisposeAsync();
+        stores[0] = new DistributedAllocation(authorityPath) { NodeName = () => names[0] };
+        typeof(DnsWebService).GetField("_allocation", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(services[0], stores[0]); servers[0].Allocation = stores[0];
+        check(stores[0].BootstrapPending("Live") && !stores[0].HasAuthority("Live", AllocationSequence.Number(lease.Address)), "Coordinator restart clears the prepared serving barrier");
+        check((await Call(admins[0], "/api/ddi/dhcp/migration/status", ("scope", "Live"))).GetProperty("status").GetString() == "ok", "Real HTTPS status cannot resume restarted authoritative store");
+        scopes[1].DomainName = "interrupted-option-application.example"; scopes[1].LeaseTimeDays = 2;
+        check((await Prepare(input)).GetProperty("status").GetString() == "ok", "Lost-response replay fails to finish durable preparation");
+        check(scopes.All(scope => !scope.Enabled) && stores.All(store => store.BootstrapPending("Live")), "Prepare activates a listener or serving authority");
+        check(scopes.All(scope => scope.LeaseTimeDays == 5 && scope.DomainName == "migration.lab.example"), "Source options were not preserved and applied to peers");
+        string preparedHash = stores[0].Bootstrap("Live").Hash;
+        try
+        {
+            await services[0].RestoreConfigAsync(new MemoryStream(), false, false, false, true, false, false, false, false, false, false, true, false, false, true);
+            throw new Exception("Restore with deletion replaces prepared authority");
+        }
+        catch (InvalidOperationException) { check(stores[0].Bootstrap("Live").Hash == preparedHash && stores[0].BootstrapPending("Live") && !stores[0].HasAuthority("Live", AllocationSequence.Number(lease.Address)), "Failed restore removes the prepared journal or serving barrier"); }
+        check((await Call(admins[0], "/api/dhcp/scopes/delete", ("name", "Live"))).GetProperty("status").GetString() == "error", "Delete removes a prepared scope");
+        check((await Call(admins[0], "/api/dhcp/scopes/set", ("name", "Live"), ("newName", "Replaced"))).GetProperty("status").GetString() == "error", "Rename removes prepared ownership");
+        var oldMesh = stores[0].Snapshot() with { Bootstraps = [], NativeHolds = [], Configurations = [], Replicas = [] };
+        check((await Call(peers[0], "/api/ddi/dhcp/state/ingest", ("state", JsonSerializer.Serialize(oldMesh, DistributedAllocation.JsonOptions)))).GetProperty("status").GetString() == "ok" && stores[0].Bootstrap("Live").Hash == preparedHash && stores[0].BootstrapPending("Live"), "Old mesh snapshot removes a prepared journal or native protection");
+        check((await Call(admins[0], "/api/dhcp/scopes/set", ("name", "Live"), ("leaseTimeDays", "2"))).GetProperty("status").GetString() == "error", "Prepared migration permits admin edits");
+        var status = await Call(admins[0], "/api/ddi/dhcp/migration/status", ("scope", "Live"));
+        check(status.GetProperty("response").GetProperty("migration").GetProperty("id").GetString() == migrationId, "Status cannot recover immutable reviewed payload");
+        Task<JsonElement> Commit() => Call(admins[0], "/api/ddi/dhcp/migration/commit", ("scope", "Live"), ("id", migrationId), ("expectedHash", Hash(input)));
+        var manager = Field<ClusterManager>(services[0], "_clusterManager"); var enrolled = Field<Dictionary<int, ClusterNode>>(manager, "_clusterNodes");
+        typeof(ClusterManager).GetField("_clusterNodes", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(manager, enrolled.Where(pair => pair.Key != 3).ToDictionary(pair => pair.Key, pair => pair.Value));
+        try { check((await Commit()).GetProperty("status").GetString() == "error" && stores[0].BootstrapPending("Live"), "Membership drift permits commit"); }
+        finally { typeof(ClusterManager).GetField("_clusterNodes", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(manager, enrolled); }
+        disconnectLast(true);
+        check((await Commit()).GetProperty("status").GetString() == "error" && stores[0].BootstrapPending("Live") && !stores[1].BootstrapPending("Live"), "Partial peer commit loses durable coordinator boundary");
+        disconnectLast(false);
+        loseLastResponse("commitPeer");
+        check((await Commit()).GetProperty("status").GetString() == "error" && stores[0].BootstrapPending("Live") && !stores[2].BootstrapPending("Live"), "Lost remote commit response pretends coordinated success or rolls authority backward");
+        check((await Commit()).GetProperty("status").GetString() == "ok", "Commit retry fails after partial peer response loss");
+        check(stores[0].FindLease("Live", lease.ClientIdentifier.ToString())?.Expires == acknowledgedExpiry && stores[0].FindLease("Live", lease.ClientIdentifier.ToString())?.Address == AllocationSequence.Number(lease.Address), "Transport migration loses existing client address or exact captured ACK expiry");
+        check(stores[0].FindOffer("Live", offer.ClientIdentifier.ToString())?.Address == AllocationSequence.Number(offer.Address) && !stores[0].Available("Live", AllocationSequence.Number(declined.Address)), "Transport migration loses offer or DECLINE protection");
+        scopes[0].LeaseTimeDays = 1; scopes[0].CommitLease(Lease.Recover(stores[0].FindLease("Live", lease.ClientIdentifier.ToString()), false));
+        var expiry = stores[0].FindLease("Live", lease.ClientIdentifier.ToString()).Expires;
+        check(expiry == acknowledgedExpiry, "Native renewal hook shortens migrated lifetime");
+        using (var sender = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        using (var receiver = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            sender.Bind(new IPEndPoint(IPAddress.Loopback, 0)); receiver.Bind(new IPEndPoint(lease.Address, 68));
+            scopes[0].SetEnabled(true);
+            typeof(Scope).GetField("_interfaceAddress", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(scopes[0], IPAddress.Loopback);
+            disconnectLast(true);
+            try
+            {
+                var process = typeof(DhcpServer).GetMethod("ProcessDhcpRequestAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+                await ((Task)process.Invoke(servers[0], [Packet(71, 3, lease.Address), new IPEndPoint(lease.Address, 68), default(IPPacketInformation), sender])).WaitAsync(deadline.Token);
+                byte[] wire = new byte[4096]; int length = await receiver.ReceiveAsync(wire.AsMemory(), SocketFlags.None, deadline.Token);
+                var acknowledgement = new DhcpMessage(new MemoryStream(wire, 0, length));
+                check(acknowledgement.DhcpMessageType.Type == DhcpMessageType.Ack && acknowledgement.YourClientIpAddress.Equals(lease.Address) && stores[0].FindLease("Live", lease.ClientIdentifier.ToString()).Expires == acknowledgedExpiry, "Real migrated renewal ACK loses captured client lifetime during peer isolation");
+            }
+            finally { disconnectLast(false); scopes[0].SetEnabled(false); }
+        }
+        check((await Prepare(input)).GetProperty("status").GetString() == "ok" && (await Commit()).GetProperty("status").GetString() == "ok" && stores[0].FindLease("Live", lease.ClientIdentifier.ToString()).Expires == expiry, "Committed replay overwrites live authority");
+        var offers = await Task.WhenAll(scopes.SelectMany((scope, index) => Enumerable.Range(80 + index * 10, 5).Select(client => scope.GetOfferAsync(Packet((byte)client)))));
+        check(offers.All(value => value is not null) && offers.Select(value => value.Address).Distinct().Count() == offers.Length && offers.All(value => !value.Address.Equals(lease.Address) && !value.Address.Equals(offer.Address) && !value.Address.Equals(declined.Address)), "Actual concurrent offers reuse protected native addresses after migration");
     }
 }

@@ -130,6 +130,9 @@ namespace DnsServerCore.Dhcp
             return address;
         }
 
+        internal void PreserveExpiry(DateTime expires)
+        { if (expires > _leaseExpires) _leaseExpires = expires; }
+
         internal void ConvertToReserved()
         {
             _type = LeaseType.Reserved;

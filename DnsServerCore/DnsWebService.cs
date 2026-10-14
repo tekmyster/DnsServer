@@ -970,6 +970,7 @@ namespace DnsServerCore
 
         internal async Task RestoreConfigAsync(Stream zipStream, bool authConfig, bool clusterConfig, bool webServiceSettings, bool dnsSettings, bool logSettings, bool zones, bool allowedZones, bool blockedZones, bool blockLists, bool apps, bool scopes, bool stats, bool logs, bool deleteExistingFiles, UserSession implantSession = null, bool isConfigTransfer = false)
         {
+            using var scopeChanges = scopes && !isConfigTransfer ? _dhcpServer.BeginScopeRestore() : null;
             await using (ZipArchive backupZip = new ZipArchive(zipStream, ZipArchiveMode.Read, false, Encoding.UTF8))
             {
                 bool restartWebService = false;
@@ -2310,6 +2311,15 @@ namespace DnsServerCore
             _webService.MapGetAndPost("/api/security/dispositions/list", _securityApi.Dispositions);
             _webService.MapPost("/api/security/dispositions/set", _securityApi.SetDisposition);
             _webService.MapGetAndPost("/api/ddi/dhcp/state/get", GetAllocationState);
+            _webService.MapPost("/api/ddi/dhcp/migration/check", CheckLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/status", GetLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/checkPeer", CheckLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/migration/snapshot", SnapshotLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/migration/preview", PreviewLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/stage", StageLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/migration/prepare", PrepareLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/commit", CommitLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/commitPeer", CommitLiveBootstrapPeer);
             _webService.MapPost("/api/ddi/dhcp/state/ingest", IngestAllocationState);
             _webService.MapPost("/api/ddi/dhcp/plan/set", SetAllocationPlan);
             _webService.MapPost("/api/ddi/dhcp/grant", GrantAllocation);

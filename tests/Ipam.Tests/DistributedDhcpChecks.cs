@@ -2,6 +2,7 @@ using DnsServerCore;
 using DnsServerCore.Dhcp;
 using System.Net;
 using System.Reflection;
+using System.Diagnostics;
 using System.Text.Json;
 
 static class DistributedDhcpChecks
@@ -16,6 +17,8 @@ static class DistributedDhcpChecks
         var plan = new AllocationPlan("lab", Guid.NewGuid().ToString("N"), Ip("192.0.2.1"), Ip("192.0.2.120"), "repeatable-seed", ["east-a", "east-b", "west-a"], [new(Ip("192.0.2.4"), Ip("192.0.2.8")), new(Ip("192.0.2.7"), Ip("192.0.2.10"))]);
         try
         {
+            await CheckCrashBoundaries(folder, Check);
+            await CheckLiveBootstrap(folder, Check, Reject);
             var sequence = new AllocationSequence(plan);
             var selections = plan.Owners.Select(owner => sequence.Candidates(owner).ToArray()).ToArray();
             Check(selections.Sum(s => s.Length) == 113 && selections.SelectMany(s => s).Distinct().Count() == 113, "Ownership is not exhaustive and disjoint");
@@ -245,6 +248,220 @@ static class DistributedDhcpChecks
         {
             if (Path.GetDirectoryName(folder) != Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)) throw new Exception("Unexpected test directory");
             Directory.Delete(folder, true);
+        }
+    }
+    static async Task CheckLiveBootstrap(string folder, Action<bool, string> check, Action<Action, string> reject)
+    {
+        uint Ip(string address) => AllocationSequence.Number(IPAddress.Parse(address));
+        string id = Guid.NewGuid().ToString("N");
+        var plan = new AllocationPlan("migration", id, Ip("192.0.2.10"), Ip("192.0.2.90"), id, ["a", "b", "c"], [], Configuration: "AQ==");
+        var sequence = new AllocationSequence(plan);
+        uint leased = sequence.Candidates("b").First(), offered = sequence.Candidates("c").First(), declined = sequence.Candidates("b").Skip(1).First();
+        DateTime expiry = DateTime.UtcNow.AddHours(5), now = DateTime.UtcNow;
+        AllocationEntry lease = new(leased, "1-0201", "02-01", "native.example", "Lease", expiry);
+        AllocationEntry offer = new(offered, "1-0202", "02-02", "offer.example", "Offer", now.AddSeconds(60));
+        AllocationEntry quarantine = new(declined, "1-0203", "02-03", null, "Declined", now.AddMinutes(10));
+        AllocationNativeSnapshot[] native = [new("a", plan.Scope, plan.Configuration, [lease, offer, quarantine]), new("b", plan.Scope, "Ag==", [lease with { Expires = expiry.AddHours(-1) }]), new("c", plan.Scope, "Aw==", [])];
+        var input = DistributedAllocation.BuildBootstrap(id, "a", plan, native, now);
+        native[0].Entries[0] = lease with { Client = "1-ffff" };
+        check(input.Native[0].Entries[0] == lease, "Bootstrap input aliases caller native evidence");
+        native = input.Native;
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, native.Select(n => n.Node == "b" ? n with { Entries = [lease with { Client = "1-0204" }] } : n).ToArray(), now), "Conflicting dormant native lease accepted");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, native.Select(n => n.Node == "c" ? n with { Entries = [offer with { Client = "1-0205", State = "Offer" }] } : n).ToArray(), now), "Unknown peer offer is inferred free");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, native.Select(n => n.Node == "c" ? n with { Entries = [lease with { Address = plan.First - 1 }] } : n).ToArray(), now), "Out of pool active native evidence accepted");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, [null, native[1], native[2]], now), "Null native participant accepted");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, native.Select(n => n.Node == "c" ? n with { Entries = [lease with { Expires = DateTime.SpecifyKind(now.AddHours(-1), DateTimeKind.Unspecified) }] } : n).ToArray(), now), "Malformed expired native evidence accepted");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan with { Configuration = "BA==" }, native, now), "Unrelated source options accepted");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, native.Select(snapshot => snapshot.Node == "b" ? snapshot with { Entries = [lease with { State = "Declined" }] } : snapshot).ToArray(), now), "Dormant quarantine silently replaces a valid live client binding");
+        reject(() => DistributedAllocation.BuildBootstrap(id, "a", plan, native.Select(snapshot => snapshot.Node == "c" ? snapshot with { Entries = [lease with { Client = "not-an-identifier", Expires = now.AddHours(-1) }] } : snapshot).ToArray(), now), "Malformed expired native client identifier accepted");
+        var paths = plan.Owners.Select(n => Path.Combine(folder, "migration-" + n + ".json")).ToArray();
+        var stores = paths.Select((path, index) => new DistributedAllocation(path) { NodeName = () => plan.Owners[index] }).ToArray();
+        try
+        {
+            var futureCapture = DistributedAllocation.BuildBootstrap(id, "a", plan, native, DateTime.UtcNow.AddSeconds(90));
+            reject(() => stores[0].PrepareBootstrap(futureCapture), "Future capture timestamp discards a still-active offer");
+            foreach (var store in stores) store.PrepareBootstrap(input);
+            var record = stores[0].Bootstrap(plan.Scope);
+            record.PreparedNodes[0] = "forged";
+            stores[0].Snapshot().Bootstraps[0].PreparedNodes[0] = "forged";
+            check(stores[0].Bootstrap(plan.Scope).PreparedNodes.SequenceEqual(["a"]), "Returned acknowledgements mutate durable local state");
+            foreach (var store in stores) check(!store.Available(plan.Scope, leased, lease.Client) && !store.Hold(plan.Scope, sequence.Candidates(store.NodeName()).Last(), "1-0210", "02-10", null, expiry), "Prepared migration grants active allocation");
+            reject(() => stores[0].CommitBootstrap(plan.Scope, id, record.Hash), "Coordinator commits without all acknowledgements");
+            reject(() => stores[0].AcknowledgeBootstrap(plan.Scope, id, record.Hash, "d"), "Unenrolled preparation acknowledgement accepted");
+            reject(() => stores[0].PrepareBootstrap(input with { Seeds = input.Seeds.Select(r => r.Node == "a" ? r with { Entries = [] } : r).ToArray() }), "Forged bootstrap seeds accepted");
+            byte[] prepared = stores[0].Export();
+            var invalidState = stores[0].Snapshot();
+            reject(() => stores[1].Merge(JsonSerializer.SerializeToUtf8Bytes(invalidState with { Bootstraps = [invalidState.Bootstraps[0] with { PreparedNodes = ["a", "a"] }] }, DistributedAllocation.JsonOptions)), "Malformed duplicate acknowledgement array accepted");
+            reject(() => stores[1].Merge(JsonSerializer.SerializeToUtf8Bytes(invalidState with { Bootstraps = [invalidState.Bootstraps[0] with { PreparedNodes = null }] }, DistributedAllocation.JsonOptions)), "Missing acknowledgement array accepted");
+            foreach (var store in stores) store.Merge(stores[1].Export());
+            check(stores[0].Bootstrap(plan.Scope).Hash == record.Hash && stores[0].Bootstrap(plan.Scope).PreparedNodes.SequenceEqual(["a"]), "Ordinary mesh traffic changes local preparation journal");
+            prepared = stores[0].Export();
+            stores[0].AcknowledgeBootstrap(plan.Scope, id, record.Hash, "b");
+            string rollback = Path.Combine(folder, "migration-rollback.json");
+            File.WriteAllBytes(rollback, prepared); File.Copy(paths[0] + ".required", rollback + ".required");
+            reject(() => new DistributedAllocation(rollback), "Older prepared acknowledgements bypass watermark");
+            File.WriteAllBytes(rollback + ".tmp", stores[0].Export());
+            await using (var recovered = new DistributedAllocation(rollback) { NodeName = () => "a" })
+                check(recovered.Bootstrap(plan.Scope).PreparedNodes.Contains("b") && recovered.BootstrapPending(plan.Scope), "Crash between barrier and rename loses prepared journal");
+            string noSafety = Path.Combine(folder, "migration-no-safety.json");
+            File.WriteAllBytes(noSafety, prepared);
+            var watermark = JsonSerializer.Deserialize<AllocationWatermark>(File.ReadAllBytes(paths[0] + ".required"), DistributedAllocation.JsonOptions);
+            File.WriteAllBytes(noSafety + ".required", JsonSerializer.SerializeToUtf8Bytes(watermark with { SafetyHash = null }, DistributedAllocation.JsonOptions));
+            reject(() => new DistributedAllocation(noSafety), "Old watermark permits a migration journal");
+            await stores[0].DisposeAsync(); stores[0] = new DistributedAllocation(paths[0]) { NodeName = () => "a" };
+            byte[] beforeRetry = stores[0].Export(); stores[0].PrepareBootstrap(input);
+            check(stores[0].Export().SequenceEqual(beforeRetry), "Lost prepare response reseeds migrated authority");
+            stores[0].AcknowledgeBootstrap(plan.Scope, id, record.Hash, "c");
+            foreach (var store in stores.Skip(1)) store.CommitBootstrap(plan.Scope, id, record.Hash);
+            stores[0].CommitBootstrap(plan.Scope, id, record.Hash);
+            check(stores[0].FindLease(plan.Scope, lease.Client)?.Expires == expiry && stores[0].FindLease(plan.Scope, lease.Client)?.Address == leased, "Migration changes client, address or acknowledged expiry");
+            check(stores[0].FindOffer(plan.Scope, offer.Client)?.Address == offered && !stores[2].Available(plan.Scope, offered), "Migration loses outstanding offer or donor hold");
+            check(!stores[0].Available(plan.Scope, declined, quarantine.Client) && !stores[1].Available(plan.Scope, declined), "Migration loses DECLINE quarantine");
+            stores[0].Commit(plan.Scope, leased, lease.Client, lease.Hardware, lease.Host, expiry.AddHours(-2));
+            check(stores[0].FindLease(plan.Scope, lease.Client).Expires == expiry, "Short live renewal reduces preserved native lifetime");
+            byte[] renewed = stores[0].Export(); stores[0].PrepareBootstrap(input); stores[0].CommitBootstrap(plan.Scope, id, record.Hash);
+            check(stores[0].Export().SequenceEqual(renewed), "Committed replay overwrites live renewals");
+            var concurrent = await Task.WhenAll(stores.Select(store => Task.Run(() => sequence.Candidates(store.NodeName()).Where(address => store.Hold(plan.Scope, address, "1-02" + address.ToString("x8"), "02-10", null, expiry)).ToArray())));
+            check(concurrent.SelectMany(addresses => addresses).Distinct().Count() == concurrent.Sum(addresses => addresses.Length), "Concurrent migrated owners allocate overlapping addresses");
+            foreach (var store in stores.Skip(1)) store.Merge(stores[0].Export());
+            check(stores[1].Bootstrap(plan.Scope).PreparedNodes.SequenceEqual(["b"]), "Mesh overwrites local acknowledgement journal");
+        }
+        finally { foreach (var store in stores) await store.DisposeAsync(); }
+        string nativePath = Path.Combine(folder, "native-hold.json");
+        await using (var store = new DistributedAllocation(nativePath) { NodeName = () => "a" })
+        {
+            store.ProtectNative(plan.Scope, quarantine); store.ProtectNativeOffers(plan.Scope, [offer]);
+            reject(() => store.ProtectNative(plan.Scope, offer with { Hardware = "zz" }), "Malformed durable native hardware accepted");
+            check(store.NativeProtected(plan.Scope, declined, quarantine.Client) && store.NativeProtected(plan.Scope, offered, "other") && !store.NativeProtected(plan.Scope, offered, offer.Client), "Durable pre-plan native protections are incorrect");
+            reject(() => store.AddPlan(plan), "Lease-free bootstrap ignores durable native protections");
+            reject(() => store.Merge(JsonSerializer.SerializeToUtf8Bytes(new AllocationState(1, [plan], []), DistributedAllocation.JsonOptions), true), "Old ordinary mesh plan ignores pre-plan native protections");
+            store.ReleaseNative(plan.Scope, declined, quarantine.Client);
+            check(store.NativeProtected(plan.Scope, declined), "Native RELEASE removes DECLINE quarantine");
+            store.ReleaseNative(plan.Scope, offered, offer.Client);
+            check(!store.NativeProtected(plan.Scope, offered), "Native RELEASE retains an unnecessary offer hold");
+        }
+        string missingBarrier = Path.Combine(folder, "native-missing-barrier.json"); File.Copy(nativePath, missingBarrier);
+        reject(() => new DistributedAllocation(missingBarrier), "Pre-plan native protections resume without watermark");
+        await using (var store = new DistributedAllocation(nativePath) { NodeName = () => "a" }) check(store.NativeProtected(plan.Scope, declined), "Restart discards native DECLINE protection");
+        string monotonicPath = Path.Combine(folder, "native-monotonic.json");
+        await using (var store = new DistributedAllocation(monotonicPath) { NodeName = () => "a" })
+        {
+            store.ProtectNative(plan.Scope, lease);
+            store.ProtectNativeOffers(plan.Scope, [lease with { State = "Offer", Host = "stale-offer.example", Expires = now.AddMinutes(1) }]);
+            check(store.NativeHolds(plan.Scope).Single() == lease, "Captured short offer downgrades acknowledged lease identity or lifetime");
+            store.ProtectNative(plan.Scope, lease with { State = "Offer", Hardware = "02:01", Host = null, Expires = now.AddMinutes(1) });
+            check(store.NativeHolds(plan.Scope).Single() == lease, "Direct short offer downgrades acknowledged lease identity or lifetime");
+            store.ProtectNativeOffers(plan.Scope, [lease with { State = "Offer", Expires = expiry.AddHours(1) }]);
+            check(store.NativeHolds(plan.Scope).Single().State == "Lease" && store.NativeHolds(plan.Scope).Single().Expires == expiry.AddHours(1), "Longer compatible offer fails to retain Lease state and maximum expiry");
+            store.ProtectNative(plan.Scope, lease with { Expires = expiry.AddHours(-1) });
+            check(store.NativeHolds(plan.Scope).Single().Expires == expiry.AddHours(1), "Compatible shorter lease renewal shortens protection");
+            var protectedState = store.Export();
+            reject(() => store.ProtectNative(plan.Scope, lease with { State = "Offer", Client = "1-0204" }), "Direct conflicting offer client overwrites lease");
+            reject(() => store.ProtectNativeOffers(plan.Scope, [lease with { State = "Offer", Client = "1-0204" }]), "Captured conflicting offer client overwrites lease");
+            reject(() => store.ProtectNative(plan.Scope, lease with { State = "Offer", Hardware = "02-04" }), "Direct conflicting offer hardware overwrites lease");
+            reject(() => store.ProtectNativeOffers(plan.Scope, [lease with { State = "Offer", Hardware = "02-04" }]), "Captured conflicting offer hardware overwrites lease");
+            reject(() => store.ProtectNative(plan.Scope, lease with { Hardware = "02-04" }), "Conflicting lease hardware overwrites acknowledged identity");
+            reject(() => store.ProtectNativeOffers(plan.Scope, [offer, lease with { State = "Offer", Hardware = "02-04" }]), "Conflicting offer batch commits partial native protection");
+            check(store.Export().SequenceEqual(protectedState), "Rejected evidence changes durable native protections");
+            store.ProtectNative(plan.Scope, quarantine);
+            store.ProtectNativeOffers(plan.Scope, [quarantine with { State = "Offer", Expires = now.AddMinutes(1) }]);
+            check(store.NativeHolds(plan.Scope).Single(entry => entry.Address == declined) == quarantine, "Capture shortens or removes DECLINE quarantine");
+            reject(() => store.ProtectNative(plan.Scope, quarantine with { State = "Offer" }), "Direct offer is permitted over active quarantine");
+            reject(() => store.ProtectNativeOffers(plan.Scope, [quarantine with { State = "Offer", Hardware = "02-04" }]), "Quarantine silently ignores incompatible captured hardware");
+        }
+        await using (var store = new DistributedAllocation(monotonicPath) { NodeName = () => "a" })
+        {
+            var restored = store.NativeHolds(plan.Scope).Single(entry => entry.Address == leased);
+            check(restored.State == "Lease" && restored.Expires == expiry.AddHours(1) && restored.Client == lease.Client && restored.Hardware == lease.Hardware && restored.Host == lease.Host, "Restart loses combined acknowledged identity or maximum lifetime");
+        }
+    }
+    public static async Task CrashFixture(string path, string phase, string expires)
+    {
+        DateTime expiry = DateTime.Parse(expires, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
+        string id = "00000000000000000000000000000042";
+        var plan = new AllocationPlan("crash", id, AllocationSequence.Number(IPAddress.Parse("203.0.113.10")), AllocationSequence.Number(IPAddress.Parse("203.0.113.50")), id, ["a", "b"], [], Configuration: "AQ==");
+        uint address = new AllocationSequence(plan).Candidates("b").First();
+        AllocationEntry lease = new(address, "1-0201", "02-01", "crash.example", "Lease", expiry);
+        await using var source = new DistributedAllocation(path) { NodeName = () => "a" };
+        if (phase == "capture")
+        {
+            string config = Path.Combine(Path.GetDirectoryName(path), "capture-" + Path.GetFileNameWithoutExtension(path));
+            Directory.CreateDirectory(config);
+            await using var log = new LogManager(true, config);
+            using var server = new DhcpServer(config, log) { Allocation = source };
+            using var scope = new Scope("crash", false, AllocationSequence.Address(plan.First), AllocationSequence.Address(plan.Last), IPAddress.Parse("255.255.255.0"), log, server)
+            { DnsUpdates = false, LeaseTimeDays = 0, LeaseTimeHours = 1 };
+            await server.AddScopeAsync(scope);
+            scope.CommitLease(Lease.Recover(lease with { Expires = expiry.AddDays(-1) }, false)); server.SaveScope(scope.Name);
+            File.WriteAllText(Path.Combine(config, "old-scope.sha256"), Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(config, "crash.scope")))));
+            scope.CommitLease(Lease.Recover(lease, false));
+            var shortOffer = Lease.Recover(lease with { State = "Offer", Expires = DateTime.UtcNow.AddMinutes(1) }, false);
+            var offers = (System.Collections.Concurrent.ConcurrentDictionary<DnsServerCore.Dhcp.Options.ClientIdentifierOption, Lease>)typeof(Scope).GetField("_offers", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(scope);
+            offers[shortOffer.ClientIdentifier] = shortOffer;
+            string blockedRoot = Path.Combine(config, "blocked-scope-writes"); File.WriteAllText(blockedRoot, "Capture scope persistence fault");
+            typeof(DhcpServer).GetField("_scopesFolder", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(server, blockedRoot);
+            await scope.CaptureNativeAllocationAsync("a", CancellationToken.None, async snapshot =>
+            {
+                if (!snapshot.Entries.Any(entry => entry.State == "Lease" && entry.Expires == expiry) || !snapshot.Entries.Any(entry => entry.State == "Offer" && entry.Expires < expiry)) throw new Exception("Capture fixture lacks acknowledged lease and shorter offer");
+                Console.WriteLine(); Console.WriteLine("READY"); Console.Out.Flush(); await Task.Delay(Timeout.Infinite);
+            });
+        }
+        source.ProtectNative("crash", lease);
+        if (phase != "native")
+        {
+            var input = DistributedAllocation.BuildBootstrap(id, "a", plan, [new("a", "crash", "AQ==", [lease]), new("b", "crash", "AQ==", [])]);
+            source.PrepareBootstrap(input);
+            await using var peer = new DistributedAllocation(path + ".peer") { NodeName = () => "b" };
+            peer.PrepareBootstrap(input); source.AcknowledgeBootstrap("crash", id, source.Bootstrap("crash").Hash, "b");
+            if (phase == "committed")
+            {
+                peer.CommitBootstrap("crash", id, peer.Bootstrap("crash").Hash);
+                source.CommitBootstrap("crash", id, source.Bootstrap("crash").Hash);
+            }
+            Console.WriteLine("READY"); Console.Out.Flush();
+            await Task.Delay(Timeout.Infinite);
+        }
+        Console.WriteLine("READY"); Console.Out.Flush();
+        await Task.Delay(Timeout.Infinite);
+    }
+    static async Task CheckCrashBoundaries(string folder, Action<bool, string> check)
+    {
+        DateTime expiry = DateTime.UtcNow.AddDays(2);
+        foreach (string phase in new[] { "native", "capture", "prepared", "committed" })
+        {
+            string path = Path.Combine(folder, "killed-" + phase + ".json");
+            var launch = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            launch.ArgumentList.Add(typeof(DistributedDhcpChecks).Assembly.Location); launch.ArgumentList.Add("--bootstrap-crash"); launch.ArgumentList.Add(path); launch.ArgumentList.Add(phase); launch.ArgumentList.Add(expiry.ToString("O"));
+            using var process = Process.Start(launch) ?? throw new Exception("Crash fixture did not start");
+            try
+            {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                string output;
+                do { output = await process.StandardOutput.ReadLineAsync(deadline.Token); } while (output is not null && output != "READY");
+                check(output == "READY", "Crash fixture did not reach durable " + phase + " boundary");
+            }
+            finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); }
+            await using var recovered = new DistributedAllocation(path) { NodeName = () => "a" };
+            check(recovered.NativeHolds("crash").Single().Expires == expiry, "Abrupt process death loses native acknowledged expiry");
+            if (phase == "capture")
+            {
+                check(recovered.NativeHolds("crash").Single().State == "Lease" && recovered.Plan("crash") is null, "Interrupted capture downgrades acknowledged lease to an offer");
+                string config = Path.Combine(folder, "capture-" + Path.GetFileNameWithoutExtension(path));
+                await using var log = new LogManager(true, config);
+                using var server = new DhcpServer(config, log) { Allocation = recovered };
+                using var original = File.OpenRead(Path.Combine(config, "crash.scope"));
+                using var restored = new Scope(original, log, server);
+                var serializedOldExpiry = DateTime.UnixEpoch.AddMilliseconds(Convert.ToInt64((expiry.AddDays(-1) - DateTime.UnixEpoch).TotalMilliseconds));
+                check(restored.Leases.Single().Value.LeaseExpires == serializedOldExpiry, "Failed capture overwrote the deliberately old native scope snapshot");
+                check(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(config, "crash.scope")))) == File.ReadAllText(Path.Combine(config, "old-scope.sha256")), "Interrupted capture changed bytes of the older native scope file");
+                original.Dispose();
+                await server.AddScopeAsync(restored);
+                var binding = restored.Leases.Single().Value;
+                check(binding.LeaseExpires == expiry && binding.ClientIdentifier.ToString() == "1-0201" && AllocationSequence.Number(binding.Address) == recovered.NativeHolds("crash").Single().Address, "Restart from older scope snapshot loses last acknowledged client/address/expiry");
+            }
+            else if (phase == "native") check(recovered.Plan("crash") is null && recovered.NativeProtected("crash", recovered.NativeHolds("crash").Single().Address), "Abrupt native restart drops protection before any plan");
+            else if (phase == "prepared") check(recovered.BootstrapPending("crash") && !recovered.HasAuthority("crash", recovered.NativeHolds("crash").Single().Address), "Abrupt prepared restart enables serving authority");
+            else check(recovered.FindLease("crash", "1-0201")?.Expires == expiry && recovered.HasAuthority("crash", recovered.NativeHolds("crash").Single().Address), "Abrupt committed restart loses acknowledged lease or inherited authority");
         }
     }
 }

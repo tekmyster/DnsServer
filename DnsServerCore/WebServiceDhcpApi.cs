@@ -388,6 +388,7 @@ namespace DnsServerCore
 
                 bool scopeExists;
                 Scope scope = _dnsWebService._dhcpServer.GetScope(scopeName);
+                using var administrativeChange = scope?.BeginAdministrativeChange();
                 if (scope is null)
                 {
                     //scope does not exists; create new scope
@@ -698,6 +699,7 @@ namespace DnsServerCore
                 string scopeName = request.GetQueryOrForm("name");
 
                 Scope scope = _dnsWebService._dhcpServer.GetScope(scopeName);
+                using var administrativeChange = scope?.BeginAdministrativeChange();
                 if (scope is null)
                     throw new DnsWebServiceException("No such scope exists: " + scopeName);
 
@@ -728,6 +730,7 @@ namespace DnsServerCore
                 string scopeName = request.GetQueryOrForm("name");
 
                 Scope scope = _dnsWebService._dhcpServer.GetScope(scopeName);
+                using var administrativeChange = scope?.BeginAdministrativeChange();
                 if (scope is null)
                     throw new DnsWebServiceException("No such scope exists: " + scopeName);
 
@@ -749,6 +752,7 @@ namespace DnsServerCore
                     throw new DnsWebServiceException("Access was denied.");
 
                 string scopeName = context.Request.GetQueryOrForm("name");
+                using var administrativeChange = _dnsWebService._dhcpServer.GetScope(scopeName)?.BeginAdministrativeChange();
 
                 await _dnsWebService._dhcpServer.EnableScopeAsync(scopeName, true);
 
@@ -763,6 +767,7 @@ namespace DnsServerCore
                     throw new DnsWebServiceException("Access was denied.");
 
                 string scopeName = context.Request.GetQueryOrForm("name");
+                using var administrativeChange = _dnsWebService._dhcpServer.GetScope(scopeName)?.BeginAdministrativeChange();
 
                 _dnsWebService._dhcpServer.DisableScope(scopeName, true);
 
@@ -777,6 +782,7 @@ namespace DnsServerCore
                     throw new DnsWebServiceException("Access was denied.");
 
                 string scopeName = context.Request.GetQueryOrForm("name");
+                using var administrativeChange = _dnsWebService._dhcpServer.GetScope(scopeName)?.BeginAdministrativeChange();
 
                 _dnsWebService._dhcpServer.DeleteScope(scopeName);
 
@@ -795,6 +801,7 @@ namespace DnsServerCore
                 string scopeName = request.GetQueryOrForm("name");
 
                 Scope scope = _dnsWebService._dhcpServer.GetScope(scopeName);
+                using var administrativeChange = scope?.BeginAdministrativeChange();
                 if (scope is null)
                     throw new DnsWebServiceException("DHCP scope does not exists: " + scopeName);
 
@@ -825,6 +832,7 @@ namespace DnsServerCore
                 string scopeName = request.GetQueryOrForm("name");
 
                 Scope scope = _dnsWebService._dhcpServer.GetScope(scopeName);
+                using var administrativeChange = scope?.BeginAdministrativeChange();
                 if (scope == null)
                     throw new DnsWebServiceException("DHCP scope does not exists: " + scopeName);
 
@@ -855,6 +863,7 @@ namespace DnsServerCore
                 string scopeName = request.GetQueryOrForm("name");
 
                 Scope scope = _dnsWebService._dhcpServer.GetScope(scopeName);
+                using var administrativeChange = scope?.BeginAdministrativeChange();
                 if (scope == null)
                     throw new DnsWebServiceException("DHCP scope does not exists: " + scopeName);
 

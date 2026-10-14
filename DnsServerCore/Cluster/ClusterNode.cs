@@ -615,6 +615,8 @@ namespace DnsServerCore.Cluster
         }
         public Task<byte[]> GetAllocationStateAsync(CancellationToken cancellationToken = default)
             => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/state/get", cancellationToken: cancellationToken);
+        public Task<byte[]> BootstrapAllocationAsync(string action, IReadOnlyDictionary<string, string> fields, CancellationToken cancellationToken = default)
+            => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/migration/" + action, fields, cancellationToken);
         public async Task PrepareAllocationAsync(string state, CancellationToken cancellationToken = default)
             => await GetApiClient().AllocationRequestAsync("api/ddi/dhcp/prepare", new Dictionary<string, string> { ["state"] = state }, cancellationToken);
         public async Task PushAllocationStateAsync(string state, CancellationToken cancellationToken = default)

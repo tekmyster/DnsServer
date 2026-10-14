@@ -17,6 +17,173 @@ namespace DnsServerCore
     {
         readonly DistributedAllocation _allocation;
         readonly CancellationTokenSource _allocationStop = new();
+        // Modified by Tekmyster Industries, LLC — remains GPL-3.0.
+        void RequireBootstrapCoordinator(HttpContext context)
+        {
+            RequireDhcpPermission(context, PermissionFlag.Modify);
+            if (!context.Request.IsHttps || context.GetCurrentSession().Type == UserSessionType.ClusterApiToken ||
+                !_authManager.IsPermitted(PermissionSection.Administration, GetSessionUser(context), PermissionFlag.Delete))
+                throw new DnsWebServiceException("Ownership migration requires a direct HTTPS administrator session.");
+            if (!_clusterManager.ClusterInitialized || _clusterManager.GetSelfNode().Type != ClusterNodeType.Primary)
+                throw new DnsWebServiceException("Create live ownership migration on the cluster primary.");
+        }
+        void RequireBootstrapPeer(HttpContext context)
+        {
+            RequireAllocationService(context);
+            var address = context.Connection.RemoteIpAddress;
+            if (address?.IsIPv4MappedToIPv6 == true) address = address.MapToIPv4();
+            if (!_clusterManager.GetPrimaryNode().IPAddresses.Contains(address)) throw new DnsWebServiceException("Only the enrolled primary may prepare live migration.");
+        }
+        string[] BootstrapOwners()
+        {
+            if (_clusterManager.ClusterNodes.Values.Any(n => n.IsFenced)) throw new InvalidOperationException("Resolve fenced cluster members before initial migration.");
+            return _clusterManager.ClusterNodes.Values.Select(n => n.Name).Order(StringComparer.Ordinal).ToArray();
+        }
+        AllocationPlan BootstrapPlan(string scope, string[] owners, string id, string seed, DhcpHaGroup[] groups = null)
+        {
+            var native = _dhcpServer.GetScope(scope) ?? throw new ArgumentException("Configure the scope on every owner before migration.");
+            using var bytes = new MemoryStream(); native.WriteTo(bytes, false, false);
+            var plan = native.BuildAllocationPlan(id, seed, owners) with { Configuration = Convert.ToBase64String(bytes.ToArray()), HaGroups = groups };
+            _ = new AllocationSequence(plan); return plan;
+        }
+        async Task<JsonElement> BootstrapPeerCall(ClusterNode peer, string action, params (string Key, string Value)[] fields)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_allocationStop.Token); deadline.CancelAfter(TimeSpan.FromSeconds(15));
+            byte[] data = await peer.BootstrapAllocationAsync(action, fields.ToDictionary(f => f.Key, f => f.Value), deadline.Token);
+            using var json = JsonDocument.Parse(data); return json.RootElement.Clone();
+        }
+        void WriteBootstrap(HttpContext context, string scope)
+        {
+            var record = _allocation.Bootstrap(scope);
+            context.GetCurrentJsonWriter().WritePropertyName("state");
+            JsonSerializer.Serialize(context.GetCurrentJsonWriter(), record is null ? null : new { record.Id, record.Scope, record.Hash, record.Phase, record.PreparedNodes }, DistributedAllocation.JsonOptions);
+        }
+        void GetLiveBootstrap(HttpContext context)
+        {
+            RequireBootstrapCoordinator(context);
+            string scope = context.Request.GetQueryOrForm("scope");
+            WriteBootstrap(context, scope);
+            context.GetCurrentJsonWriter().WritePropertyName("migration");
+            var record = _allocation.Bootstrap(scope);
+            JsonSerializer.Serialize(context.GetCurrentJsonWriter(), record is null ? null : JsonSerializer.Deserialize<AllocationBootstrapInput>(record.Payload, DistributedAllocation.JsonOptions), DistributedAllocation.JsonOptions);
+        }
+        async Task CheckLiveBootstrap(HttpContext context)
+        {
+            RequireBootstrapCoordinator(context); string name = context.Request.GetQueryOrForm("scope"); var owners = BootstrapOwners();
+            var plan = BootstrapPlan(name, owners, "00000000000000000000000000000000", "compatibility");
+            foreach (var peer in _clusterManager.ClusterNodes.Values.Where(n => n.Id != _clusterManager.GetSelfNode().Id))
+            {
+                var reply = await BootstrapPeerCall(peer, "checkPeer", ("scope", name));
+                var candidate = reply.Deserialize<AllocationPlan>(DistributedAllocation.JsonOptions);
+                if (JsonSerializer.Serialize(candidate with { Configuration = null }, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(plan with { Configuration = null }, DistributedAllocation.JsonOptions))
+                    throw new InvalidOperationException("Scope address eligibility differs between owners; resolve it before pausing DHCP.");
+            }
+            context.GetCurrentJsonWriter().WritePropertyName("state"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), new { scope = name, compatible = true, owners }, DistributedAllocation.JsonOptions);
+        }
+        void CheckLiveBootstrapPeer(HttpContext context)
+        {
+            RequireBootstrapPeer(context); var plan = BootstrapPlan(context.Request.GetQueryOrForm("scope"), BootstrapOwners(), "00000000000000000000000000000000", "compatibility");
+            context.GetCurrentJsonWriter().WritePropertyName("state"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), plan, DistributedAllocation.JsonOptions);
+        }
+        async Task SnapshotLiveBootstrapPeer(HttpContext context)
+        {
+            RequireBootstrapPeer(context); var scope = _dhcpServer.GetScope(context.Request.GetQueryOrForm("scope")) ?? throw new ArgumentException("Unknown scope.");
+            var snapshot = await scope.CaptureNativeAllocationAsync(_allocation.NodeName(), context.RequestAborted);
+            context.GetCurrentJsonWriter().WritePropertyName("state"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), snapshot, DistributedAllocation.JsonOptions);
+        }
+        async Task PreviewLiveBootstrap(HttpContext context)
+        {
+            RequireBootstrapCoordinator(context); string name = context.Request.GetQueryOrForm("scope");
+            if (_allocation.Plan(name) is not null) throw new InvalidOperationException("This scope already has ownership; resume its saved migration instead.");
+            string id = context.Request.GetQueryOrForm("id"); if (!Guid.TryParseExact(id, "N", out _)) throw new ArgumentException("A stable 32-hex migration identifier is required.");
+            var owners = BootstrapOwners(); var groups = JsonSerializer.Deserialize<DhcpHaGroup[]>(context.Request.GetQueryOrForm("haGroups", "[]"), DistributedAllocation.JsonOptions);
+            var plan = BootstrapPlan(name, owners, id, id, groups);
+            var snapshots = new System.Collections.Generic.List<AllocationNativeSnapshot>();
+            snapshots.Add(await _dhcpServer.GetScope(name).CaptureNativeAllocationAsync(_allocation.NodeName(), context.RequestAborted));
+            foreach (var peer in _clusterManager.ClusterNodes.Values.Where(n => n.Id != _clusterManager.GetSelfNode().Id).OrderBy(n => n.Name, StringComparer.Ordinal))
+                snapshots.Add((await BootstrapPeerCall(peer, "snapshot", ("scope", name))).Deserialize<AllocationNativeSnapshot>(DistributedAllocation.JsonOptions));
+            var input = DistributedAllocation.BuildBootstrap(id, _allocation.NodeName(), plan, snapshots.OrderBy(n => n.Node, StringComparer.Ordinal).ToArray());
+            context.GetCurrentJsonWriter().WritePropertyName("state"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), input, DistributedAllocation.JsonOptions);
+        }
+        AllocationBootstrapInput ReadLiveBootstrap(HttpContext context)
+        {
+            string json = context.Request.GetQueryOrForm("migration");
+            if (Encoding.UTF8.GetByteCount(json) > 8 * 1024 * 1024) throw new ArgumentException("Migration exceeds 8 MiB.");
+            var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(json, DistributedAllocation.JsonOptions) ?? throw new ArgumentException("Missing migration.");
+            if (input.Plan?.Owners is null || input.Source != _clusterManager.GetPrimaryNode().Name || !input.Plan.Owners.Order(StringComparer.Ordinal).SequenceEqual(BootstrapOwners()))
+                throw new ArgumentException("Migration membership or primary identity changed.");
+            string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input, DistributedAllocation.JsonOptions)));
+            if (hash != context.Request.GetQueryOrForm("expectedHash")) throw new InvalidOperationException("Migration review hash changed.");
+            return input;
+        }
+        async Task PrepareLocalLiveBootstrap(AllocationBootstrapInput input, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var previous = _allocation.Bootstrap(input.Plan.Scope);
+            var scope = _dhcpServer.GetScope(input.Plan.Scope) ?? throw new ArgumentException("Unknown scope.");
+            using var bytes = new MemoryStream(Convert.FromBase64String(input.Plan.Configuration)); using var source = new Scope(bytes, _log, _dhcpServer);
+            if (source.Enabled || source.Name != scope.Name || !source.MatchesAllocationPlan(input.Plan)) throw new ArgumentException("Reviewed source configuration changes ownership or listener enablement.");
+            if (previous is not null)
+            {
+                _allocation.PrepareBootstrap(input);
+                if (previous.Phase == "Prepared")
+                {
+                    await scope.ApplySharedOptionsAsync(source, input.Plan); _dhcpServer.SaveScope(scope.Name);
+                }
+                return;
+            }
+            await scope.CaptureNativeAllocationAsync(_allocation.NodeName(), cancellationToken, async actual =>
+            {
+                if (!ReferenceEquals(scope, _dhcpServer.GetScope(input.Plan.Scope))) throw new InvalidOperationException("Scope was replaced during capture; capture a new review before migration.");
+                var expected = input.Native.Single(n => n.Node == actual.Node);
+                DateTime observedUtc = DateTime.UtcNow;
+                string Entries(AllocationEntry[] entries) => JsonSerializer.Serialize(entries.Where(e => e.Expires > observedUtc).Distinct().OrderBy(e => e.Address).ThenBy(e => e.Client, StringComparer.Ordinal).ThenBy(e => e.State, StringComparer.Ordinal), DistributedAllocation.JsonOptions);
+                if (expected.Configuration != actual.Configuration || Entries(expected.Entries) != Entries(actual.Entries)) throw new InvalidOperationException("Native leases, offers, quarantine or options changed after review; capture a new review before migration.");
+                if (!scope.MatchesAllocationPlan(input.Plan)) throw new InvalidOperationException("Scope eligibility differs from reviewed ownership.");
+                _allocation.PrepareBootstrap(input); // Durable phase and initial authority precede admission reopening.
+                await scope.ApplySharedOptionsAsync(source, input.Plan); _dhcpServer.SaveScope(scope.Name);
+            });
+        }
+        async Task StageLiveBootstrapPeer(HttpContext context)
+        {
+            RequireBootstrapPeer(context); var input = ReadLiveBootstrap(context);
+            await PrepareLocalLiveBootstrap(input, context.RequestAborted); WriteBootstrap(context, input.Plan.Scope);
+        }
+        async Task PrepareLiveBootstrap(HttpContext context)
+        {
+            RequireBootstrapCoordinator(context); var input = ReadLiveBootstrap(context);
+            await PrepareLocalLiveBootstrap(input, context.RequestAborted);
+            string payload = JsonSerializer.Serialize(input, DistributedAllocation.JsonOptions); var record = _allocation.Bootstrap(input.Plan.Scope);
+            foreach (var peer in _clusterManager.ClusterNodes.Values.Where(n => n.Id != _clusterManager.GetSelfNode().Id))
+            {
+                var receipt = await BootstrapPeerCall(peer, "stage", ("migration", payload), ("expectedHash", record.Hash));
+                if (receipt.GetProperty("hash").GetString() != record.Hash || receipt.GetProperty("id").GetString() != input.Id) throw new InvalidOperationException("Peer acknowledged a different migration.");
+                _allocation.AcknowledgeBootstrap(input.Plan.Scope, input.Id, record.Hash, peer.Name);
+            }
+            if (!input.Plan.Owners.Order(StringComparer.Ordinal).SequenceEqual(BootstrapOwners())) throw new InvalidOperationException("Migration membership changed during preparation; keep DHCP paused.");
+            WriteBootstrap(context, input.Plan.Scope);
+        }
+        async Task CommitLiveBootstrap(HttpContext context)
+        {
+            RequireBootstrapCoordinator(context); string name = context.Request.GetQueryOrForm("scope"); string id = context.Request.GetQueryOrForm("id"); string hash = context.Request.GetQueryOrForm("expectedHash");
+            var record = _allocation.Bootstrap(name) ?? throw new InvalidOperationException("Prepare migration before committing.");
+            var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(record.Payload, DistributedAllocation.JsonOptions);
+            if (input.Source != _allocation.NodeName() || !_dhcpServer.GetScope(name).MatchesAllocationPlan(input.Plan)) throw new InvalidOperationException("Migration source or eligibility changed; keep DHCP paused.");
+            if (record.Id != id || record.Hash != hash || !(record.PreparedNodes ?? []).Order(StringComparer.Ordinal).SequenceEqual(BootstrapOwners())) throw new InvalidOperationException("Every current owner must acknowledge this exact durable migration.");
+            foreach (var peer in _clusterManager.ClusterNodes.Values.Where(n => n.Id != _clusterManager.GetSelfNode().Id))
+                await BootstrapPeerCall(peer, "commitPeer", ("scope", name), ("id", id), ("expectedHash", hash));
+            if (!input.Plan.Owners.Order(StringComparer.Ordinal).SequenceEqual(BootstrapOwners())) throw new InvalidOperationException("Migration membership changed during commit; keep DHCP paused.");
+            _allocation.CommitBootstrap(name, id, hash); WriteBootstrap(context, name);
+        }
+        void CommitLiveBootstrapPeer(HttpContext context)
+        {
+            RequireBootstrapPeer(context); string name = context.Request.GetQueryOrForm("scope");
+            var record = _allocation.Bootstrap(name) ?? throw new InvalidOperationException("Prepare migration before committing.");
+            var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(record.Payload, DistributedAllocation.JsonOptions);
+            if (input.Source != _clusterManager.GetPrimaryNode().Name || !input.Plan.Owners.Order(StringComparer.Ordinal).SequenceEqual(BootstrapOwners())) throw new InvalidOperationException("Migration membership changed; keep DHCP paused.");
+            if (!_dhcpServer.GetScope(name).MatchesAllocationPlan(input.Plan)) throw new InvalidOperationException("Scope eligibility changed; keep DHCP paused.");
+            _allocation.CommitBootstrap(name, context.Request.GetQueryOrForm("id"), context.Request.GetQueryOrForm("expectedHash")); WriteBootstrap(context, name);
+        }
         bool IsAllocationService(HttpContext context) => _clusterManager.ClusterInitialized && context.Request.IsHttps && context.GetCurrentSession().Type == UserSessionType.ClusterApiToken && context.Request.QueryOrForm("actingUser") is null;
         void RequireAllocationService(HttpContext context)
         { if (!IsAllocationService(context)) throw new DnsWebServiceException("A direct HTTPS cluster session is required."); }
@@ -175,6 +342,7 @@ namespace DnsServerCore
             foreach (var plan in state.Plans)
             {
                 if (_allocation.Plan(plan.Scope) is not null) continue;
+                if (state.Bootstraps?.Any(b => b.Scope == plan.Scope) == true) throw new InvalidOperationException("Live migration requires reviewed native preparation on this node.");
                 var scope = _dhcpServer.GetScope(plan.Scope);
                 if (scope is null)
                 {
@@ -187,7 +355,7 @@ namespace DnsServerCore
                     if (JsonSerializer.Serialize(candidate, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(plan, DistributedAllocation.JsonOptions)) throw new InvalidOperationException("Bootstrap scope and ownership disagree.");
                     await _dhcpServer.AddScopeAsync(scope);
                 }
-                if (!scope.CanInitializeAllocation) throw new InvalidOperationException("Disable and drain the scope before joining allocation ownership.");
+                if (!scope.CanInitializeAllocation || _allocation.NativeHolds(scope.Name).Length > 0) throw new InvalidOperationException("Disable and drain the scope before joining allocation ownership.");
                 var expected = scope.BuildAllocationPlan(plan.Epoch, plan.Seed, plan.Owners) with { Configuration = plan.Configuration, HaGroups = plan.HaGroups };
                 if (JsonSerializer.Serialize(expected, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(plan, DistributedAllocation.JsonOptions)) throw new InvalidOperationException("Scope addressing does not match coordinator ownership.");
             }
@@ -198,6 +366,7 @@ namespace DnsServerCore
                 if (local is not null && local.Revision == configuration.Revision && local.Hash != configuration.Hash) throw new InvalidOperationException("Conflicting configuration revision.");
                 if (configuration.Data.Length > 1024 * 1024 || Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(configuration.Data))) != configuration.Hash) throw new ArgumentException("Invalid configuration content hash.");
                 var scope = _dhcpServer.GetScope(configuration.Scope) ?? throw new ArgumentException("Unknown configured scope.");
+                using var administrativeChange = scope.BeginAdministrativeChange();
                 using MemoryStream actual = new(); scope.WriteTo(actual, false, false);
                 if (local?.Revision == configuration.Revision && Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(actual.ToArray())) == configuration.Hash) continue;
                 var plan = state.Plans.Single(p => p.Scope == configuration.Scope);

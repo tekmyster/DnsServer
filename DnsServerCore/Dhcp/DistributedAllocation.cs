@@ -24,8 +24,13 @@ namespace DnsServerCore.Dhcp
     public sealed record AllocationReplica(string Scope, string Epoch, string Node, long Sequence, AllocationEntry[] Entries, AllocationEvent[] History = null);
     public sealed record AllocationDevice(string Scope, string Node, AllocationEntry Lease);
     public sealed record DistributedScopeConfiguration(string Scope, long Revision, string Hash, string Data);
-    public sealed record AllocationState(int Version, AllocationPlan[] Plans, AllocationReplica[] Replicas, DistributedScopeConfiguration[] Configurations = null);
-    public sealed record AllocationWatermark(string Node, AllocationWatermarkScope[] Scopes);
+    public sealed record AllocationNativeSnapshot(string Node, string Scope, string Configuration, AllocationEntry[] Entries);
+    public sealed record AllocationBootstrapInput(string Id, string Source, AllocationPlan Plan, AllocationNativeSnapshot[] Native, AllocationReplica[] Seeds, DateTime CapturedUtc);
+    public sealed record AllocationBootstrapRecord(string Id, string Scope, string Hash, string Phase, string Payload, string[] PreparedNodes = null);
+    public sealed record AllocationNativeHold(string Scope, AllocationEntry Entry);
+    public sealed record AllocationState(int Version, AllocationPlan[] Plans, AllocationReplica[] Replicas, DistributedScopeConfiguration[] Configurations = null,
+        AllocationBootstrapRecord[] Bootstraps = null, AllocationNativeHold[] NativeHolds = null);
+    public sealed record AllocationWatermark(string Node, AllocationWatermarkScope[] Scopes, string SafetyHash = null);
     public sealed record AllocationWatermarkScope(string Scope, string Epoch, long Sequence, string Hash);
 
     // A bijection, not hash modulo pool size: every eligible address has exactly one owner.
@@ -148,14 +153,15 @@ namespace DnsServerCore.Dhcp
                         _state = staged;
                     }
                 }
-                else if (_state.Plans.Length > 0) throw new InvalidDataException("Authoritative watermark is missing; offline recovery is required.");
+                else if (_state.Plans.Length > 0 || (_state.NativeHolds?.Length ?? 0) > 0) throw new InvalidDataException("Authoritative watermark is missing; offline recovery is required.");
                 RebuildLeaseIndex(); _sequences = _state.Plans.ToDictionary(p => p.Scope, p => new AllocationSequence(p));
             }
             catch { _writerLock.Dispose(); throw; }
         }
         static AllocationPlan Copy(AllocationPlan p) => p with { Owners = p.Owners.ToArray(), Excluded = p.Excluded.ToArray(), Reservations = p.Reservations?.ToArray(), HaGroups = p.HaGroups?.ToArray() };
         static AllocationReplica Copy(AllocationReplica r) => r with { Entries = r.Entries.ToArray(), History = r.History?.ToArray() };
-        public AllocationState Snapshot() { lock (_sync) return _state with { Plans = _state.Plans.Select(Copy).ToArray(), Replicas = _state.Replicas.Select(Copy).ToArray(), Configurations = _state.Configurations?.ToArray() }; }
+        static AllocationBootstrapRecord Copy(AllocationBootstrapRecord record) => record with { PreparedNodes = record.PreparedNodes?.ToArray() };
+        public AllocationState Snapshot() { lock (_sync) return _state with { Plans = _state.Plans.Select(Copy).ToArray(), Replicas = _state.Replicas.Select(Copy).ToArray(), Configurations = _state.Configurations?.ToArray(), Bootstraps = _state.Bootstraps?.Select(Copy).ToArray(), NativeHolds = _state.NativeHolds?.ToArray() }; }
         public AllocationPlan Plan(string scope) { lock (_sync) { var p = _state.Plans.SingleOrDefault(p => p.Scope == scope); return p is null ? null : Copy(p); } }
         public bool ProtectedByOtherPlan(string scope, uint first, uint last)
         { lock (_sync) return _state.Plans.Any(p => p.Scope != scope && first <= p.Last && p.First <= last); }
@@ -168,11 +174,23 @@ namespace DnsServerCore.Dhcp
             {
                 var replica = state.Replicas.SingleOrDefault(r => r.Scope == p.Scope && r.Node == node) ?? new(p.Scope, p.Epoch, node, 0, []);
                 return new AllocationWatermarkScope(p.Scope, p.Epoch, replica.Sequence, AuthorityHash(p, replica));
-            }).ToArray());
+            }).ToArray(), Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new {
+                bootstraps = (state.Bootstraps ?? []).OrderBy(b => b.Scope, StringComparer.Ordinal).ToArray(),
+                nativeHolds = (state.NativeHolds ?? []).OrderBy(h => h.Scope, StringComparer.Ordinal).ThenBy(h => h.Entry.Address).ToArray()
+            }, JsonOptions))));
         static void ValidateWatermark(AllocationState state, AllocationWatermark watermark)
         {
             if (watermark.Node is null || watermark.Scopes is null) throw new InvalidDataException("Invalid authoritative watermark.");
             var actual = MakeWatermark(state, watermark.Node);
+            if (watermark.SafetyHash is null && ((state.Bootstraps?.Length ?? 0) > 0 || (state.NativeHolds?.Length ?? 0) > 0)) throw new InvalidDataException("Migration protections require a safety-bound durable watermark.");
+            foreach (var record in state.Bootstraps ?? [])
+            {
+                var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(record.Payload, JsonOptions);
+                if (input.Plan.Owners.Contains(watermark.Node) && !record.PreparedNodes.Contains(watermark.Node) ||
+                    input.Source == watermark.Node && record.Phase == "Committed" && !record.PreparedNodes.Order(StringComparer.Ordinal).SequenceEqual(input.Plan.Owners.Order(StringComparer.Ordinal)))
+                    throw new InvalidDataException("Local migration acknowledgements do not prove durable preparation.");
+            }
+            if (watermark.SafetyHash is not null && watermark.SafetyHash != actual.SafetyHash) throw new InvalidDataException("Native protections or migration journal differ from the durable barrier.");
             foreach (var known in watermark.Scopes)
             {
                 var present = actual.Scopes.SingleOrDefault(s => s.Scope == known.Scope);
@@ -183,7 +201,7 @@ namespace DnsServerCore.Dhcp
         void EnsureLocalAuthority()
         {
             if (_recoveryRequired) throw new InvalidOperationException("Authoritative DHCP state requires offline recovery.");
-            if (_watermark is not null && _watermark.Scopes.Length > 0 && _watermark.Node != NodeName()) throw new InvalidOperationException("Allocation node identity changed; fenced migration is required.");
+            if (_watermark is not null && (_watermark.Scopes.Length > 0 || (_state.NativeHolds?.Length ?? 0) > 0) && _watermark.Node != NodeName()) throw new InvalidOperationException("Allocation node identity changed; fenced migration is required.");
             if (ReferenceEquals(_verifiedAuthorityState, _state) && _verifiedAuthorityNode == NodeName()) return;
             if (_watermark is not null) ValidateWatermark(_state, _watermark);
             _verifiedAuthorityState = _state; _verifiedAuthorityNode = NodeName();
@@ -192,6 +210,26 @@ namespace DnsServerCore.Dhcp
         {
             if (state is null || state.Version != 1 || state.Plans is null || state.Replicas is null || state.Plans.Length > 1000 || state.Replicas.Length > 128000 || state.Plans.Select(p => p.Scope).Distinct().Count() != state.Plans.Length) throw new ArgumentException("Invalid distributed state.");
             foreach (var p in state.Plans) _ = new AllocationSequence(p);
+            if (state.Bootstraps?.Any(b => b is null) == true || state.Bootstraps?.Length > 1000 || state.Bootstraps?.Select(b => b.Scope).Distinct().Count() != state.Bootstraps?.Length ||
+                state.Bootstraps?.Any(b => b is null || !Guid.TryParseExact(b.Id, "N", out _) || b.Phase != "Prepared" && b.Phase != "Committed" ||
+                    b.Payload is null || b.Payload.Length > 8 * 1024 * 1024 || !state.Plans.Any(p => p.Scope == b.Scope) ||
+                    Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(b.Payload))) != b.Hash) == true) throw new ArgumentException("Invalid migration journal.");
+            foreach (var record in state.Bootstraps ?? [])
+            {
+                var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(record.Payload, JsonOptions);
+                var plan = state.Plans.Single(p => p.Scope == record.Scope);
+                if (input is null || input.Id != record.Id || input.Plan is null || !Same(input.Plan, plan) || !plan.Owners.Contains(input.Source) ||
+                    record.PreparedNodes is null || record.PreparedNodes.Length == 0 || record.PreparedNodes.Length > plan.Owners.Length ||
+                    record.PreparedNodes.Distinct(StringComparer.Ordinal).Count() != record.PreparedNodes.Length || record.PreparedNodes.Any(n => !plan.Owners.Contains(n)))
+                    throw new ArgumentException("Invalid migration acknowledgements or payload.");
+                var rebuilt = BuildBootstrap(input.Id, input.Source, input.Plan, input.Native, input.CapturedUtc);
+                if (JsonSerializer.Serialize(rebuilt, JsonOptions) != record.Payload) throw new ArgumentException("Migration payload does not match native evidence.");
+            }
+            if (state.NativeHolds?.Length > 100000 || state.NativeHolds?.Any(h => h is null || string.IsNullOrEmpty(h.Scope) || h.Scope.Length > 255 || h.Entry is null || h.Entry.Expires.Kind != DateTimeKind.Utc ||
+                h.Entry.State != "Offer" && h.Entry.State != "Lease" && h.Entry.State != "Declined" || string.IsNullOrEmpty(h.Entry.Client) || h.Entry.Client.Length > 1024 || string.IsNullOrEmpty(h.Entry.Hardware) || h.Entry.Hardware.Length > 255 || h.Entry.Host?.Length > 255 ||
+                h.Entry.GrantId is not null || h.Entry.Borrower is not null || h.Entry.AuthorityOwner is not null || h.Entry.Protection is not null) == true ||
+                state.NativeHolds?.Select(h => (h.Scope,h.Entry.Address)).Distinct().Count() != state.NativeHolds?.Length) throw new ArgumentException("Invalid native protections.");
+            foreach (var hold in state.NativeHolds ?? []) ValidateNativeIdentity(hold.Entry);
             if (state.Configurations?.Length > 1000 || state.Configurations?.Select(c => c.Scope).Distinct().Count() != state.Configurations?.Length || state.Configurations?.Any(c => c is null || !state.Plans.Any(p => p.Scope == c.Scope) || c.Revision < 1 || c.Data is null || c.Data.Length > 1024 * 1024 || Convert.ToHexString(SHA256.HashData(Convert.FromBase64String(c.Data))) != c.Hash) == true) throw new ArgumentException("Invalid scope configuration snapshots.");
             foreach (var p in state.Plans) if (state.Plans.Any(other => other.Scope != p.Scope && p.First <= other.Last && other.First <= p.Last)) throw new ArgumentException("Distributed scopes cannot overlap.");
             if (state.Replicas.Select(r => (r.Scope, r.Node)).Distinct().Count() != state.Replicas.Length) throw new ArgumentException("Duplicate replicas.");
@@ -214,6 +252,18 @@ namespace DnsServerCore.Dhcp
                 }
             }
         }
+        static void ValidateNativeIdentity(AllocationEntry entry)
+        {
+            try
+            {
+                if (entry.Client.Split('-').Length != 2) throw new ArgumentException("Invalid native client identifier.");
+                var client = Options.ClientIdentifierOption.Parse(entry.Client);
+                var hardware = Lease.ParseHardwareAddress(entry.Hardware);
+                if (client.Identifier.Length == 0 || client.Identifier.Length > 254 || hardware.Length == 0 || hardware.Length > 16) throw new ArgumentException("Invalid native client or hardware length.");
+            }
+            catch (Exception exception) when (exception is FormatException || exception is OverflowException || exception is IndexOutOfRangeException)
+            { throw new ArgumentException("Invalid native client identifier or hardware address.", exception); }
+        }
         void Save(AllocationState next)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -225,7 +275,7 @@ namespace DnsServerCore.Dhcp
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path)));
                 using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
                 { JsonSerializer.Serialize(stream, next, JsonOptions); stream.Flush(true); }
-                if (next.Plans.Length > 0)
+                if (next.Plans.Length > 0 || (next.NativeHolds?.Length ?? 0) > 0 || _watermark?.SafetyHash is not null)
                 {
                     var watermark = MakeWatermark(next, NodeName());
                     // Publish the barrier before the snapshot: a crash between these writes stops service,
@@ -256,7 +306,176 @@ namespace DnsServerCore.Dhcp
             {
                 var current = _state.Plans.SingleOrDefault(p => p.Scope == plan.Scope);
                 if (current is not null) { if (Same(current, plan)) return; throw new InvalidOperationException("Ownership is immutable until fenced migration is implemented."); }
+                if (NativeHolds(plan.Scope).Length > 0) throw new InvalidOperationException("Live native protections require reviewed ownership migration.");
                 var next = _state with { Plans = _state.Plans.Append(plan).ToArray() }; Validate(next); Save(next);
+            }
+        }
+        // Modified by Tekmyster Industries, LLC — remains GPL-3.0.
+        // Bootstrap writes every initial owner snapshot exactly once while all native scopes are
+        // quiescent. Ordinary replication must never acquire this initial-authority privilege.
+        public static AllocationBootstrapInput BuildBootstrap(string id, string source, AllocationPlan plan, AllocationNativeSnapshot[] native, DateTime? capturedUtc = null)
+        {
+            if (!Guid.TryParseExact(id, "N", out _) || plan is null || plan.Owners is null || !plan.Owners.Contains(source) || native is null || native.Any(n => n is null) ||
+                native.Length != plan.Owners.Length || native.Select(n => n.Node).Distinct().Count() != native.Length ||
+                native.Any(n => n.Scope != plan.Scope || !plan.Owners.Contains(n.Node) || n.Entries is null || n.Entries.Length > 100000))
+                throw new ArgumentException("Invalid native migration participants.");
+            var sequence = new AllocationSequence(plan); var now = capturedUtc ?? DateTime.UtcNow;
+            if (now.Kind != DateTimeKind.Utc || now > DateTime.UtcNow.AddMinutes(2)) throw new ArgumentException("Invalid migration capture timestamp.");
+            if (native.Any(n => string.IsNullOrEmpty(n.Configuration) || n.Configuration.Length > 1024 * 1024 || n.Entries.Any(e => e is null || e.Expires.Kind != DateTimeKind.Utc ||
+                e.State != "Lease" && e.State != "Offer" && e.State != "Declined" || string.IsNullOrEmpty(e.Client) || e.Client.Length > 1024 || string.IsNullOrEmpty(e.Hardware) || e.Hardware.Length > 255 || e.Host?.Length > 255 ||
+                e.GrantId is not null || e.Borrower is not null || e.AuthorityOwner is not null || e.Protection is not null))) throw new ArgumentException("Invalid native migration evidence.");
+            foreach (var snapshot in native)
+            {
+                _ = Convert.FromBase64String(snapshot.Configuration);
+                foreach (var entry in snapshot.Entries) ValidateNativeIdentity(entry);
+            }
+            if (native.Single(n => n.Node == source).Configuration != plan.Configuration) throw new ArgumentException("Source configuration differs from the migration plan.");
+            var live = native.SelectMany(n => n.Entries).Where(e => e.Expires > now).GroupBy(e => e.Address).Select(g =>
+            {
+                if (g.Any(e => e.State != "Lease" && e.State != "Offer" && e.State != "Declined" || string.IsNullOrEmpty(e.Client) || string.IsNullOrEmpty(e.Hardware)) ||
+                    g.Select(e => e.Client).Distinct().Count() != 1 || g.Select(e => e.Hardware).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1 ||
+                    g.Any(e => e.State == "Declined") && g.Any(e => e.State != "Declined"))
+                    throw new InvalidOperationException("Conflicting native lease or offer evidence; resolve it before migrating.");
+                if (sequence.Owner(g.Key) is null) throw new InvalidOperationException("A live address is outside eligible ownership; migration is unavailable.");
+                foreach (var e in g) { _ = Options.ClientIdentifierOption.Parse(e.Client); _ = Lease.ParseHardwareAddress(e.Hardware); }
+                var selected = g.OrderByDescending(e => e.State == "Declined" ? 2 : e.State == "Lease" ? 1 : 0).ThenByDescending(e => e.Expires).First();
+                return selected with { Expires = g.Max(e => e.Expires), GrantId = null, Borrower = null, AuthorityOwner = null, Protection = null };
+            }).OrderBy(e => e.Address).ToArray();
+            if (live.GroupBy(e => e.Client).Any(g => g.Count(e => e.State != "Declined") > 1)) throw new InvalidOperationException("A client has conflicting native addresses.");
+            var entries = plan.Owners.ToDictionary(n => n, _ => new List<AllocationEntry>());
+            foreach (var lease in live)
+            {
+                string owner = sequence.Owner(lease.Address);
+                if (owner == source) { entries[source].Add(lease); continue; }
+                string grantId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id + ":" + lease.Address))).Substring(0, 32).ToLowerInvariant();
+                entries[owner].Add(lease with { State = "Grant", Expires = DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc), GrantId = grantId,
+                    Borrower = source, Protection = new(lease.State, lease.Expires) });
+                entries[source].Add(lease with { GrantId = grantId, AuthorityOwner = owner });
+            }
+            var replicas = plan.Owners.Order(StringComparer.Ordinal).Select(n =>
+            {
+                var values = entries[n].OrderBy(e => e.Address).ToArray();
+                var events = values.Select((e, i) => new AllocationEvent(i + 1, now, null, e)).TakeLast(2000).ToArray();
+                return new AllocationReplica(plan.Scope, plan.Epoch, n, values.Length, values, events);
+            }).ToArray();
+            Validate(new(1, [plan], replicas));
+            return new(id, source, Copy(plan), native.Select(n => n with { Entries = n.Entries.ToArray() }).ToArray(), replicas, now);
+        }
+        public AllocationBootstrapRecord Bootstrap(string scope)
+        { lock (_sync) { var record = _state.Bootstraps?.SingleOrDefault(b => b.Scope == scope); return record is null ? null : Copy(record); } }
+        public bool BootstrapPending(string scope) => Bootstrap(scope)?.Phase == "Prepared";
+        public void PrepareBootstrap(AllocationBootstrapInput input)
+        {
+            byte[] encoded = JsonSerializer.SerializeToUtf8Bytes(input, JsonOptions);
+            if (encoded.Length > 8 * 1024 * 1024) throw new ArgumentException("Migration exceeds 8 MiB.");
+            if (input is null || input.Plan?.Owners is null || !Guid.TryParseExact(input.Id, "N", out _) || !input.Plan.Owners.Contains(NodeName()) ||
+                !input.Plan.Owners.Contains(input.Source) || input.Native is null || input.Seeds is null) throw new ArgumentException("Invalid migration.");
+            // Rebuild the seed against the review's complete protected evidence, not current wall time.
+            Validate(new(1, [input.Plan], input.Seeds));
+            var rebuilt = BuildBootstrap(input.Id, input.Source, input.Plan, input.Native, input.CapturedUtc);
+            if (!encoded.AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(rebuilt, JsonOptions))) throw new ArgumentException("Migration authority does not match captured native evidence.");
+            DateTime observedUtc = DateTime.UtcNow;
+            var protectedEntries = input.Seeds.Single(replica => replica.Node == input.Source).Entries;
+            if (input.Native.SelectMany(snapshot => snapshot.Entries).Any(entry => entry.Expires > observedUtc && !protectedEntries.Any(protection => protection.Address == entry.Address && protection.Client == entry.Client && protection.Expires >= entry.Expires)))
+                throw new ArgumentException("Migration omits still-active native evidence; capture a new review.");
+            string hash = Convert.ToHexString(SHA256.HashData(encoded));
+            lock (_sync)
+            {
+                var previous = Bootstrap(input.Plan.Scope);
+                if (previous is not null)
+                {
+                    if (previous.Id != input.Id || previous.Hash != hash) throw new InvalidOperationException("A different immutable migration already owns this scope.");
+                    return; // Never overwrite authority after a lost response or restart.
+                }
+                if (Plan(input.Plan.Scope) is not null) throw new InvalidOperationException("Scope already has allocation ownership.");
+                var next = _state with { Plans = _state.Plans.Append(Copy(input.Plan)).ToArray(), Replicas = _state.Replicas.Concat(input.Seeds.Select(Copy)).ToArray(),
+                    Bootstraps = (_state.Bootstraps ?? []).Append(new(input.Id, input.Plan.Scope, hash, "Prepared", Encoding.UTF8.GetString(encoded), [NodeName()])).ToArray() };
+                Validate(next); Save(next);
+            }
+        }
+        public void CommitBootstrap(string scope, string id, string hash)
+        {
+            lock (_sync)
+            {
+                var previous = Bootstrap(scope) ?? throw new InvalidOperationException("Prepare migration before committing ownership.");
+                if (previous.Id != id || previous.Hash != hash) throw new InvalidOperationException("Migration review identity changed.");
+                if (previous.Phase == "Committed") return;
+                var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(previous.Payload, JsonOptions);
+                if (NodeName() == input.Source && !(previous.PreparedNodes ?? []).Order(StringComparer.Ordinal).SequenceEqual(input.Plan.Owners.Order(StringComparer.Ordinal)))
+                    throw new InvalidOperationException("Every owner must acknowledge durable preparation before the coordinator commits.");
+                Save(_state with { Bootstraps = _state.Bootstraps.Select(b => b.Scope == scope ? b with { Phase = "Committed" } : b).ToArray() });
+            }
+        }
+        public void AcknowledgeBootstrap(string scope, string id, string hash, string node)
+        {
+            lock (_sync)
+            {
+                var previous = Bootstrap(scope) ?? throw new InvalidOperationException("Missing prepared migration.");
+                var input = JsonSerializer.Deserialize<AllocationBootstrapInput>(previous.Payload, JsonOptions);
+                if (previous.Id != id || previous.Hash != hash || input.Source != NodeName() || !input.Plan.Owners.Contains(node)) throw new InvalidOperationException("Invalid preparation acknowledgement.");
+                if ((previous.PreparedNodes ?? []).Contains(node)) return;
+                Save(_state with { Bootstraps = _state.Bootstraps.Select(b => b.Scope == scope ? b with { PreparedNodes = (b.PreparedNodes ?? []).Append(node).Order(StringComparer.Ordinal).ToArray() } : b).ToArray() });
+            }
+        }
+        public AllocationEntry[] NativeHolds(string scope)
+        { lock (_sync) return (_state.NativeHolds ?? []).Where(h => h.Scope == scope && h.Entry.Expires > DateTime.UtcNow).Select(h => h.Entry).ToArray(); }
+        static AllocationEntry CombineNativeProtection(AllocationEntry previous, AllocationEntry observed, bool capturedOffer)
+        {
+            if (previous is null) return observed;
+            if (previous.Client != observed.Client || !Lease.ParseHardwareAddress(previous.Hardware).SequenceEqual(Lease.ParseHardwareAddress(observed.Hardware)))
+                throw new InvalidOperationException("Native client or hardware evidence conflicts with durable protection.");
+            DateTime expires = previous.Expires > observed.Expires ? previous.Expires : observed.Expires;
+            if (previous.State == "Declined")
+            {
+                if (observed.State != "Declined" && !capturedOffer) throw new InvalidOperationException("Native address remains quarantined; wait for its protection to expire.");
+                return previous with { Expires = expires };
+            }
+            if (observed.State == "Declined") return observed;
+            var retained = previous.State == "Lease" && observed.State == "Offer" ? previous : observed;
+            return retained with { Expires = expires };
+        }
+        public void ProtectNative(string scope, AllocationEntry entry)
+        {
+            Validate(new(1, [], [], NativeHolds: [new(scope, entry)]));
+            lock (_sync)
+            {
+                var previous = NativeHolds(scope).SingleOrDefault(e => e.Address == entry.Address);
+                entry = CombineNativeProtection(previous, entry, false);
+                var holds = (_state.NativeHolds ?? []).Where(h => h.Entry.Expires > DateTime.UtcNow && (h.Scope != scope || h.Entry.Address != entry.Address)).Append(new(scope, entry)).ToArray();
+                var next = _state with { NativeHolds = holds }; Validate(next); Save(next);
+            }
+        }
+        public void ReleaseNative(string scope, uint address, string client)
+        {
+            lock (_sync)
+            {
+                var holds = (_state.NativeHolds ?? []).Where(h => h.Scope != scope || h.Entry.Address != address || h.Entry.Client != client || h.Entry.State == "Declined").ToArray();
+                if (holds.Length != (_state.NativeHolds?.Length ?? 0)) Save(_state with { NativeHolds = holds });
+            }
+        }
+        public void ProtectNativeOffers(string scope, AllocationEntry[] entries)
+        {
+            if (entries is null || entries.Length > 100000 || entries.Any(entry => entry is null || entry.State != "Offer")) throw new ArgumentException("Invalid captured native offers.");
+            foreach (var entry in entries) Validate(new(1, [], [], NativeHolds: [new(scope, entry)]));
+            lock (_sync)
+            {
+                var holds = (_state.NativeHolds ?? []).Where(h => h.Entry.Expires > DateTime.UtcNow).ToList();
+                foreach (var entry in entries.Where(e => e.State == "Offer" && e.Expires > DateTime.UtcNow))
+                {
+                    var previous = holds.SingleOrDefault(hold => hold.Scope == scope && hold.Entry.Address == entry.Address)?.Entry;
+                    var retained = CombineNativeProtection(previous, entry, true);
+                    holds.RemoveAll(h => h.Scope == scope && h.Entry.Address == entry.Address); holds.Add(new(scope, retained));
+                }
+                if (JsonSerializer.Serialize(holds, JsonOptions) == JsonSerializer.Serialize(_state.NativeHolds ?? [], JsonOptions)) return;
+                var next = _state with { NativeHolds = holds.ToArray() }; Validate(next); Save(next);
+            }
+        }
+        public bool NativeProtected(string scope, uint address, string client = null)
+        {
+            lock (_sync)
+            {
+                EnsureLocalAuthority();
+                return NativeHolds(scope).Any(e => e.Address == address && (e.State == "Declined" || e.Client != client));
             }
         }
         public void Merge(byte[] bytes, bool importPlans = false)
@@ -268,7 +487,12 @@ namespace DnsServerCore.Dhcp
                 foreach (var p in incoming.Plans)
                 {
                     if (plans.TryGetValue(p.Scope, out var existing)) { if (!Same(existing, p)) throw new InvalidOperationException("Conflicting ownership epoch."); }
-                    else if (importPlans) plans.Add(p.Scope, Copy(p)); else throw new InvalidOperationException("Install the allocation plan before accepting replicas.");
+                    else if (importPlans)
+                    {
+                        if (incoming.Bootstraps?.Any(b => b.Scope == p.Scope) == true || NativeHolds(p.Scope).Length > 0) throw new InvalidOperationException("Reviewed local preparation is required for live native authority.");
+                        plans.Add(p.Scope, Copy(p));
+                    }
+                    else throw new InvalidOperationException("Install the allocation plan before accepting replicas.");
                 }
                 var replicas = _state.Replicas.ToDictionary(r => (r.Scope, r.Node));
                 foreach (var r in incoming.Replicas)
@@ -293,7 +517,8 @@ namespace DnsServerCore.Dhcp
                         if (!configurations.TryGetValue(configuration.Scope, out var current) || configuration.Revision > current.Revision) configurations[configuration.Scope] = configuration;
                         else if (configuration.Revision == current.Revision && configuration != current) throw new InvalidOperationException("Conflicting scope configuration revision.");
                     }
-                var next = new AllocationState(1, plans.Values.ToArray(), replicas.Values.ToArray(), configurations.Values.ToArray());
+                var next = _state with { Plans = plans.Values.ToArray(), Replicas = replicas.Values.ToArray(), Configurations = configurations.Values.ToArray() };
+                Validate(next);
                 if (JsonSerializer.Serialize(next, JsonOptions) != JsonSerializer.Serialize(_state, JsonOptions)) Save(next);
             }
         }
@@ -431,6 +656,7 @@ namespace DnsServerCore.Dhcp
         {
             lock (_sync)
             {
+                if (BootstrapPending(scope) || _recoveryRequired) return false;
                 var p = _state.Plans.Single(p => p.Scope == scope); string owner = _sequences[scope].Owner(address);
                 if (owner == NodeName()) return Local(scope, p).Entries.All(e => e.Address != address || e.State != "Grant");
                 return owner is not null && _state.Replicas.SingleOrDefault(r => r.Scope == scope && r.Node == owner)?.Entries.Any(e => e.Address == address && e.State == "Grant" && e.Borrower == NodeName()) == true;

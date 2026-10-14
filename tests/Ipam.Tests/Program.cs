@@ -4,6 +4,7 @@ using System.Net;
 using System.Numerics;
 
 if (args.Length > 0 && (args[0] == "--package" || args[0] == "--prepare-package")) { await PackageChecks.Run(args); return; }
+if (args.Length == 4 && args[0] == "--bootstrap-crash") { await DistributedDhcpChecks.CrashFixture(args[1], args[2], args[3]); return; }
 
 if (args.Contains("--migration")) { await MigrationChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--syslog")) { await SyslogChecks.Run(); return; }

@@ -231,9 +231,11 @@ namespace DnsServerCore.Dhcp
 
         private async Task ProcessDhcpRequestAsync(DhcpMessage request, IPEndPoint remoteEP, IPPacketInformation ipPacketInformation, Socket udpListener)
         {
+            var servingScope = FindScope(request, remoteEP.Address, ipPacketInformation);
+            if (servingScope is null || !servingScope.TryEnterServingRequest()) return;
             try
             {
-                DhcpMessage response = await ProcessDhcpMessageAsync(request, remoteEP, ipPacketInformation);
+                DhcpMessage response = await ProcessDhcpMessageCoreAsync(request, remoteEP, ipPacketInformation);
 
                 //send response
                 if (response != null)
@@ -318,9 +320,18 @@ namespace DnsServerCore.Dhcp
 
                 _log.Write(remoteEP, ex);
             }
+            finally { servingScope.ExitServingRequest(); }
         }
 
         private async Task<DhcpMessage> ProcessDhcpMessageAsync(DhcpMessage request, IPEndPoint remoteEP, IPPacketInformation ipPacketInformation)
+        {
+            var scope = FindScope(request, remoteEP.Address, ipPacketInformation);
+            if (scope is null || !scope.TryEnterServingRequest()) return null;
+            try { return await ProcessDhcpMessageCoreAsync(request, remoteEP, ipPacketInformation); }
+            finally { scope.ExitServingRequest(); }
+        }
+
+        private async Task<DhcpMessage> ProcessDhcpMessageCoreAsync(DhcpMessage request, IPEndPoint remoteEP, IPPacketInformation ipPacketInformation)
         {
             if (request.OpCode != DhcpMessageOpCode.BootRequest)
                 return null;
@@ -1135,6 +1146,7 @@ namespace DnsServerCore.Dhcp
 
             try
             {
+                if (scope.MigrationCapturing || Allocation?.BootstrapPending(scope.Name) == true) throw new InvalidOperationException("Commit the prepared ownership migration before activating DHCP.");
                 //find scope interface for binding socket
                 if (waitForInterface)
                 {
@@ -1275,6 +1287,7 @@ namespace DnsServerCore.Dhcp
 
         private async Task LoadScopeAsync(Scope scope, bool waitForInterface)
         {
+            scope.RecoverNativeLeases(Allocation);
             foreach (KeyValuePair<string, Scope> entry in _scopes)
             {
                 Scope existingScope = entry.Value;
@@ -1431,6 +1444,24 @@ namespace DnsServerCore.Dhcp
         #endregion
 
         #region public
+
+        sealed class ScopeChangeBatch : IDisposable
+        {
+            readonly List<IDisposable> _changes;
+            public ScopeChangeBatch(List<IDisposable> changes) => _changes = changes;
+            public void Dispose() { foreach (var change in _changes) change.Dispose(); }
+        }
+
+        internal IDisposable BeginScopeRestore()
+        {
+            var changes = new List<IDisposable>();
+            try
+            {
+                foreach (var scope in _scopes.Values) changes.Add(scope.BeginAdministrativeChange());
+                return new ScopeChangeBatch(changes);
+            }
+            catch { foreach (var change in changes) change.Dispose(); throw; }
+        }
 
         public void Start()
         {

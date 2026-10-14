@@ -126,7 +126,7 @@ public sealed class SyslogForwarder : IAsyncDisposable
             query = question?.Name, queryType = question?.Type.ToString(), responseCode = response?.RCODE.ToString() ?? "NoResponse" }, JsonOptions), response is null ? 3 : 6, true);
         } catch { Interlocked.Increment(ref _dropped); }
     }
-    public bool SendTest() => Queue("test", "teQnatium syslog forwarding test", 6);
+    public bool SendTest() => Queue("test", "teQtanium syslog forwarding test", 6);
     bool Queue(string category, string message, int severity, bool structured = false)
     {
         try { return QueueCore(category, message, severity, structured); }
@@ -140,7 +140,7 @@ public sealed class SyslogForwarder : IAsyncDisposable
         message = (structured ? message : Limit(message, 2000)).Replace("\r", "\\r").Replace("\n", "\\n").Replace("\0", "\\0");
         string host = new string((_hostname() ?? "-").Take(255).Select(c => c is >= '!' and <= '~' ? c : '_').ToArray());
         if (host.Length == 0) host = "-";
-        string header = "<" + (run.Settings.Facility * 8 + Math.Clamp(severity, 0, 7)) + ">1 " + DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture) + " " + host + " teQnatium " + Environment.ProcessId + " " + category + " - \uFEFF";
+        string header = "<" + (run.Settings.Facility * 8 + Math.Clamp(severity, 0, 7)) + ">1 " + DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture) + " " + host + " teQtanium " + Environment.ProcessId + " " + category + " - \uFEFF";
         string payload = header + message;
         byte[] buffer = new byte[Math.Min(8192, Encoding.UTF8.GetByteCount(payload))];
         Encoding.UTF8.GetEncoder().Convert(payload.AsSpan(), buffer, true, out _, out int bytesUsed, out _);

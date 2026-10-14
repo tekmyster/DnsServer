@@ -6,7 +6,7 @@
     <!-- Preserve the engine identity used by existing app and cluster compatibility checks. -->
     <AssemblyVersion>15.6.1.0</AssemblyVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-    <Product>teQnatium DDI Server</Product>
-    <Company>Arqilo</Company>
+    <Product>teQtanium DDI Server</Product>
+    <Company>Tekmyster Industries, LLC</Company>
   </PropertyGroup>
 </Project>

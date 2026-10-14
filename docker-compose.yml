@@ -1,6 +1,6 @@
 services:
-  teqnatium:
-    image: teqnatium-ddi:0.1.0-alpha.4
+  teqtanium:
+    image: teqtanium-ddi:0.1.0-alpha.4
     ports:
       - "127.0.0.1:5380:5380/tcp"
       - "53:53/tcp"

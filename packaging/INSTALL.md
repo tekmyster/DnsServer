@@ -1,6 +1,6 @@
-# Install teQnatium DDI Server
+# Install teQtanium DDI Server
 
-These alpha packages contain the teQnatium application, not server configuration or model weights. Verify SHA256SUMS before installation. Export a backup before changing an existing deployment.
+These alpha packages contain the teQtanium application, not server configuration or model weights. Verify SHA256SUMS before installation. Export a backup before changing an existing deployment.
 
 | Download | Use |
 | --- | --- |
@@ -12,7 +12,7 @@ These alpha packages contain the teQnatium application, not server configuration
 
 The Windows installer registers the TectaniumDDI service, uses Program Files for binaries and ProgramData for configuration, and binds its console to 127.0.0.1:5380. It creates a random initial admin credential in the protected configuration directory. Read initial-admin-password.txt as an administrator, then sign in and set your preferred credential. It does not change adapter DNS or firewall rules. Existing deployments and occupied service ports are rejected. Configuration is retained on uninstall.
 
-The Linux installer creates tectanium-ddi.service with a dedicated service account, separate application/configuration/log directories and a console on 127.0.0.1:5380. Connect through an SSH tunnel to reach that loopback console. The initial admin credential is in /etc/teqnatium-ddi/initial-admin-password.txt. Existing services are not replaced. --stage-only verifies and stages a new version without activating it; perform upgrades through the documented backup and migration workflow.
+The Linux installer creates tectanium-ddi.service with a dedicated service account, separate application/configuration/log directories and a console on 127.0.0.1:5380. Connect through an SSH tunnel to reach that loopback console. The initial admin credential is in /etc/teqtanium-ddi/initial-admin-password.txt. Existing services are not replaced. --stage-only verifies and stages a new version without activating it; perform upgrades through the documented backup and migration workflow.
 
 For a manual portable launch, run `dotnet DnsServerApp.dll --portable-app /absolute/configuration/path`, or the native executable for a self-contained package. The upstream API/environment identifiers remain available. Configure an initial credential with DNS_SERVER_ADMIN_PASSWORD_FILE before first start. New configuration without an explicit credential retains the engine's admin/admin default; change it before granting network access. The automatic service installers supply a random credential instead.
 

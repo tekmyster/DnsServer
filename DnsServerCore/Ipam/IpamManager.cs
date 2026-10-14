@@ -97,6 +97,15 @@ namespace DnsServerCore.Ipam
                 foreach (var item in discoveredNetworks.OrderBy(n => n.Source == "DhcpScope" ? 0 : 1))
                 {
                     var network = new IpamNetwork(item.Prefix);
+                    var linked = subnets.FirstOrDefault(s => s.Source == "DhcpScope" && item.Source == "DhcpScope" && string.Equals(s.DhcpScope, item.DhcpScope, StringComparison.OrdinalIgnoreCase));
+                    if (linked is not null && linked.Prefix != network.Prefix)
+                    {
+                        // Follow scope subnet changes while retaining stable identity and valid operator intent.
+                        bool invalidIntent = _state.Assignments.Any(a => a.SubnetId == linked.Id && string.IsNullOrEmpty(a.Source) && (!network.Contains(Address(a.Address)) || IpamNetwork.Number(Address(a.Address)) < network.FirstUsable || IpamNetwork.Number(Address(a.Address)) > network.LastUsable));
+                        bool overlap = subnets.Any(s => s.Id != linked.Id && s.ViewId == linked.ViewId && network.Overlaps(new IpamNetwork(s.Prefix)) && !(s.Container && new IpamNetwork(s.Prefix).PrefixLength < network.PrefixLength));
+                        if (invalidIntent || overlap) continue;
+                        subnets[subnets.IndexOf(linked)] = linked with { Prefix = network.Prefix };
+                    }
                     var existing = subnets.FirstOrDefault(s => s.ViewId == "default" && s.Prefix == network.Prefix && !s.Container);
                     if (existing is not null)
                     {

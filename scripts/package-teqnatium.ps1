@@ -29,11 +29,11 @@ if ($Runtime -eq 'portable') {
     Copy-Item -LiteralPath (Join-Path $root 'packaging/start.sh'),(Join-Path $root 'packaging/start.cmd') -Destination $payload
 }
 $extension=if ($Runtime -eq 'win-x64') { 'zip' } else { 'tar.gz' }
-$archive=Join-Path $output "teQnatium-$Version-$Runtime.$extension"
+$archive=Join-Path $output "teQtanium-$Version-$Runtime.$extension"
 & python (Join-Path $root 'packaging/package.py') $payload $archive --version $Version --runtime $Runtime
 if ($LASTEXITCODE -ne 0) { throw 'Package validation failed.' }
 if ($Runtime -eq 'portable') {
-    & python (Join-Path $root 'packaging/package.py') $payload (Join-Path $output "teQnatium-$Version-portable.zip") --version $Version --runtime $Runtime
+    & python (Join-Path $root 'packaging/package.py') $payload (Join-Path $output "teQtanium-$Version-portable.zip") --version $Version --runtime $Runtime
     if ($LASTEXITCODE -ne 0) { throw 'Portable ZIP failed.' }
 }
 Write-Output $archive

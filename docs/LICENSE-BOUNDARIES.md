@@ -19,26 +19,34 @@ Previously published GPL files also retain their existing license. In particular
 
 These files were already present at commit `e59c2ed4ba7d6a483ab3e94d6e4b91c62a912cc3`. This is a specific historical exception to the new-file path rule, not permission to add private code to that project.
 
+## Domain A paths
+
+Preserve GPL notices in existing upstream files and their modifications under `DnsServerCore/**`, `DnsServerCore.ApplicationCommon/**`, `DnsServerCore.HttpApi/**`, `DnsServerApp/**`, `DnsServerWindowsService/**`, `DnsServerSystemTrayApp/**`, `DnsServerWindowsSetup/**`, `DnsServer.sln`, `Dockerfile`, `docker-compose.yml`, and `scripts/**`. Only newly authored independent files in explicitly nested commercial paths can be considered for Domain B; a path alone does not establish independence.
+
 ## New private files
 
 New original files created in the following paths are designated private by the owner:
 
-- `Apps/Tectanium.*`
+- `Apps/Tectanium.*/**`
 - `Tectanium.*/**`
+- `Apps/teQtanium.*/**` and `teQtanium.*/**` (new spelling; the same rules apply)
 - `DnsServerCore/**/Tectanium/**`
 - `docs/tectanium/**`
+- `docs/enterprise/**`
 - `packaging/tectanium/**`
 
 Files explicitly bearing the owner's All Rights Reserved header are also private, regardless of path. Add this exact notice at the top of each new private file, using comment delimiters required by its format:
 
 ```text
-// Copyright (c) 2026 Tekmyster LLC. All Rights Reserved.
-// Proprietary and Confidential — Private Commercial License.
-// This file is NOT licensed under GPL-3.0 and may not be redistributed.
-// Contact: licensing@tekmyster.com
+// Copyright (c) 2026 Tekmyster Industries, LLC. All Rights Reserved.
+// teQtanium Private Commercial — Free for Homelabs & Non-Profits under LICENSE.md Domain B
+// Enterprise use 250+ IPs / 5k qps requires commercial license.
+// Contact: licensing@tekmyster.com | Non-profits: nonprofits@tekmyster.com | https://tekmyster.com
 ```
 
 Record every new private file by repository-relative path in PRIVATE-FILES.txt and add a corresponding entry to THIRD-PARTY-NOTICES.md. Keep its source and binaries out of public Git history, source archives, containers, installers, and release assets. The path inventory contains no private implementation.
+
+Never gate DNS/DHCP operation on a license result; licensing feedback is a banner only. For uncertain GPL provenance, retain GPL and add `// Modified by Tekmyster Industries, LLC — remains GPL-3.0` in the source comment syntax.
 
 Never add this notice to upstream modifications or previously GPL-distributed files. If provenance is uncertain, preserve/default to GPL-3.0 and ask the owner before creating a private implementation.
 

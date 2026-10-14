@@ -31,6 +31,7 @@ static class ApiChecks
         using (var dns = new DnsServer(folder, Path.Combine(repository, "DnsServerCore/dohwww"), log))
         {
             dns.LoadConfigFile();
+            if (serve) dns.ServerDomain = "demo.teqtanium.test";
             dns.LocalEndPoints = [new IPEndPoint(IPAddress.Loopback, dnsPort)];
             dns.EnableCheckForUpdate = false;
             dns.SaveConfigFile(true);

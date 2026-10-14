@@ -99,6 +99,12 @@ try
     var offNetwork = AddSubnet(automatic, "default", "10.50.0.0/16");
     automatic.SynchronizeDiscovery([new("10.50.1.0/24", "Overlap", "Overlap", "", "DhcpScope")], []);
     Check(!automatic.Snapshot().Subnets.Any(s => s.DhcpScope == "Overlap"), "Discovery silently merged overlapping leaf networks");
+    var moved = new IpamManager(Path.Combine(folder, "scope-move.json"));
+    moved.SynchronizeDiscovery(discoveredNetworks, discoveredAddresses.Take(1));
+    string scopeIdentity = moved.Snapshot().Subnets.Single().Id;
+    moved.SynchronizeDiscovery([new("10.20.31.0/24", "Servers", "Servers", "example", "DhcpScope")], [new("10.20.31.10", "reserved.example", "client1", "Reserved", "DhcpReservation")]);
+    Check(moved.Snapshot().Subnets.Single().Id == scopeIdentity && moved.Snapshot().Subnets.Single().Prefix == "10.20.31.0/24", "Changed DHCP subnet was not synchronized with stable identity");
+    Check(moved.Snapshot().Assignments.Single().Address == "10.20.31.10", "Old reservation remained after DHCP subnet change");
     Console.WriteLine($"PASS: {passed} IPAM checks");
 }
 finally

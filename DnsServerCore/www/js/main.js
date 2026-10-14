@@ -283,8 +283,8 @@ $(function () {
 
     var headerHtml = $("#header").html();
 
-    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/teqnatium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">teQnatium</span></a>" + headerHtml + "</div>");
-    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/teQnatium-DDI-Server\" target=\"_blank\">teQnatium source</a> | <a href=\"https://github.com/tekmyster/teQnatium-DDI-Server/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
+    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/teqtanium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">teQtanium</span></a>" + headerHtml + "</div>");
+    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/teQtanium-DDI-Server\" target=\"_blank\">teQtanium source</a> | <a href=\"https://github.com/tekmyster/teQtanium-DDI-Server/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
 
     loadQuickBlockLists();
     loadQuickForwardersList();
@@ -1165,7 +1165,7 @@ function updateDnsSettingsDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.uptimestamp = responseJSON.response.uptimestamp; //update timestamp since server may have restarted during current session
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "teQnatium DDI Server · " + (responseJSON.response.productVersion || "Development");
+    document.title = responseJSON.response.dnsServerDomain + " - " + "teQtanium DDI Server · " + (responseJSON.response.productVersion || "Development");
     $("#lblAboutVersion").text(responseJSON.response.productVersion || "Development");
     $("#lblAboutUptime").text(moment(responseJSON.response.uptimestamp).local().format("lll") + " (" + moment(responseJSON.response.uptimestamp).fromNow() + ")");
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);

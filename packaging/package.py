@@ -20,7 +20,7 @@ files = sorted(f for f in a.folder.rglob('*') if f.is_file())
 banned = {'auth.config', 'dns.config', 'security.json', 'syslog.json', 'credentials.json', 'lab-connection.json'}
 if any(f.name in banned or f.suffix in {'.key', '.kdbx'} for f in files):
     raise SystemExit('Deployment data must not be included in a package.')
-metadata = {'product': 'teQnatium DDI Server', 'release': a.version, 'runtime': a.runtime,
+metadata = {'product': 'teQtanium DDI Server', 'release': a.version, 'runtime': a.runtime,
             'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
             'libraryCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root.parent / 'TechnitiumLibrary', text=True).strip(),
             'engineVersion': '15.6.1'}

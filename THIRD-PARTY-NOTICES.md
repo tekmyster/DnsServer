@@ -4,6 +4,8 @@
 
 This application derives from [Technitium DNS Server](https://github.com/TechnitiumSoftware/DnsServer), by Shreyas Zare and the upstream contributors, under GNU GPL-3.0. The root LICENSE and original notices continue to apply to upstream files and their modifications.
 
+The identical upstream license text is also provided in LICENSE-GPL3. Commercial edition terms in LICENSE.md apply only to independently licensable proprietary components. They do not restrict GPL-covered components or revoke previously granted GPL permissions. The existing `Tectanium.WindowsService/Program.cs` and `Tectanium.WindowsService/Tectanium.WindowsService.csproj` were already published under the root GPL license and retain that license. Their directory name does not reclassify them as proprietary. Edition descriptions are not evidence that an existing GPL implementation has become commercial code or that a listed service is available.
+
 ## Private file inventory
 
 The owner's new-file policy is recorded in [LICENSE-BOUNDARIES.md](docs/LICENSE-BOUNDARIES.md). [PRIVATE-FILES.txt](PRIVATE-FILES.txt) inventories private files. No new private files are included in this change; existing GPL files have not been reclassified. Add a path-specific entry here for every future new private file. Private implementations are excluded from public publication.

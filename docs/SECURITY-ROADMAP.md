@@ -1,8 +1,8 @@
-# teQnatium security direction
+# teQtanium security direction
 
-Combine public capability patterns into an independently implemented, openly available security system. Vendor descriptions inform requirements; they do not establish that teQnatium reproduces vendor algorithms or achieves equivalent accuracy.
+Combine public capability patterns into an independently implemented, openly available security system. Vendor descriptions inform requirements; they do not establish that teQtanium reproduces vendor algorithms or achieves equivalent accuracy.
 
-| Capability pattern | teQnatium delivery | Next work |
+| Capability pattern | teQtanium delivery | Next work |
 | --- | --- | --- |
 | Infoblox: predictive intelligence and asset context | Existing local indicators, asynchronous MISP enrichment and current DHCP device context | Source confidence/age/sightings, infrastructure relationships, first-seen and registration-age separation, historical lease attribution, site/view/VLAN and NetBox context |
 | BlueCat: explainable behavioral indicators | Rolling five-minute and one-hour tunneling analysis, cross-domain DGA-pattern suspicion and periodic DNS observations | Representative traffic replay, learned baselines, configurable detector policies and false-positive measurements |

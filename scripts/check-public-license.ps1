@@ -15,7 +15,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect repository files for public pac
 $existingGpl=@('Tectanium.WindowsService/Program.cs','Tectanium.WindowsService/Tectanium.WindowsService.csproj')
 $blocked=[System.Collections.Generic.List[string]]::new()
 foreach ($relative in $files) {
-    $privatePath=$relative -cmatch '^(Apps/Tectanium\.[^/]+(?:/|$)|Tectanium\.[^/]+/|DnsServerCore/(?:.*/)?Tectanium/|docs/tectanium/|packaging/tectanium/)'
+    $privatePath=$relative -cmatch '^(Apps/(?:Tectanium|teQtanium)\.[^/]+(?:/|$)|(?:Tectanium|teQtanium)\.[^/]+/|DnsServerCore/(?:.*/)?Tectanium/|docs/tectanium/|docs/enterprise/|packaging/tectanium/)'
     if ($privatePath -and $relative -cnotin $existingGpl) { $blocked.Add($relative); continue }
     $path=Join-Path $root $relative
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }

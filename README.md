@@ -72,3 +72,8 @@ In Apps, open **App stores** and select **Technitium** to use its existing in-co
 ## License
 
 See [the edition terms](LICENSE.md), [upstream GPL v3](LICENSE-GPL3), and [license boundaries](docs/LICENSE-BOUNDARIES.md). Existing GPL components retain their GPL license. Original copyright and required attribution are preserved in source headers and [third-party notices](THIRD-PARTY-NOTICES.md). Product versioning is independent of the retained engine compatibility identity used by existing APIs, applications and cluster checks.
+
+
+## Support the project
+
+If you find teQtanium useful and would like to support its development, you can [support the project on Patreon](https://www.patreon.com/teQtanium). Thank you for your support!

@@ -13,6 +13,7 @@ if (args.Contains("--transport")) { await DistributedTransportChecks.Run(args.Co
 if (args.Contains("--api") || args.Contains("--serve")) { await ApiChecks.Run(args.Contains("--serve")); return; }
 if (args.Contains("--security-analytics")) { await SecurityAnalyticsChecks.Run(); return; }
 if (args.Contains("--security")) { await SecurityChecks.Run(); return; }
+if (args.Contains("--udp-listeners")) { await DistributedDhcpChecks.RunUdpListeners(); return; }
 if (args.Contains("--dhcp")) { await DistributedDhcpChecks.Run(); return; }
 if (args.Contains("--netbox")) { await NetBoxChecks.Run(); return; }
 if (args.Contains("--security-ops")) { await SecurityOperationsChecks.Run(); return; }

@@ -7,6 +7,85 @@ using System.Text.Json;
 
 static class DistributedDhcpChecks
 {
+    public static async Task RunUdpListeners()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "ddi-udp-listener-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        int passed = 0;
+        try
+        {
+            await CheckUdpListenerLifecycle(folder, (value, reason) => { if (!value) throw new Exception(reason); passed++; });
+            Console.WriteLine($"UDP listener lifecycle: {passed} checks passed");
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    static async Task CheckUdpListenerLifecycle(string folder, Action<bool, string> check)
+    {
+        string configuration = Path.Combine(folder, "udp-listeners"); Directory.CreateDirectory(configuration);
+        await using var log = new LogManager(true, configuration);
+        using var server = new DhcpServer(configuration, log);
+        var bind = typeof(DhcpServer).GetMethod("BindUdpListener", BindingFlags.Instance | BindingFlags.NonPublic);
+        var unbind = typeof(DhcpServer).GetMethod("UnbindUdpListener", BindingFlags.Instance | BindingFlags.NonPublic);
+        var listeners = (System.Collections.IDictionary)typeof(DhcpServer).GetField("_udpListeners", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(server);
+        async Task Concurrent(Action<int> operation)
+        {
+            const int count = 24;
+            using var ready = new CountdownEvent(count); using var release = new ManualResetEventSlim();
+            var tasks = Enumerable.Range(0, count).Select(index => Task.Factory.StartNew(() => { ready.Signal(); release.Wait(); operation(index); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            bool started = ready.Wait(TimeSpan.FromSeconds(10)); release.Set();
+            await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(20));
+            check(started, "Concurrent UDP listener operations did not all reach the start barrier");
+        }
+        int BoundSockets(IPEndPoint endpoint) => System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Count(address => address.Equals(endpoint));
+        for (int iteration = 0; iteration < 6; iteration++)
+        {
+            IPEndPoint endpoint;
+            using (var probe = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp))
+            { probe.Bind(new IPEndPoint(IPAddress.Loopback, 0)); endpoint = (IPEndPoint)probe.LocalEndPoint; }
+            await Concurrent(_ => bind.Invoke(server, [endpoint]));
+            var listener = listeners[IPAddress.Loopback];
+            var socket = (System.Net.Sockets.Socket)listener.GetType().GetProperty("Socket").GetValue(listener);
+            check(listeners.Count == 1 && (int)listener.GetType().GetProperty("ScopeCount").GetValue(listener) == 24, "Concurrent binding lost tracked scope references");
+            check(BoundSockets(endpoint) == 1, "Concurrent binding leaked an untracked receive socket");
+            await Concurrent(_ => unbind.Invoke(server, [endpoint]));
+            check(listeners.Count == 0 && socket.SafeHandle.IsClosed && BoundSockets(endpoint) == 0, "Final concurrent unbind left residual DHCP ingress");
+            using (var replacement = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp) { ExclusiveAddressUse = true })
+            using (var sender = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp))
+            {
+                replacement.Bind(endpoint);
+                byte[] payload = System.Text.Encoding.UTF8.GetBytes("no-residual-dhcp-ingress");
+                await sender.SendToAsync(payload, endpoint);
+                byte[] received = new byte[128];
+                var packet = await replacement.ReceiveFromAsync(received, System.Net.Sockets.SocketFlags.None, new IPEndPoint(IPAddress.Any, 0)).WaitAsync(TimeSpan.FromSeconds(5));
+                check(received.AsSpan(0, packet.ReceivedBytes).SequenceEqual(payload), "Released listener endpoint cannot exclusively receive real UDP traffic");
+            }
+            bind.Invoke(server, [endpoint]);
+            await Concurrent(_ => { bind.Invoke(server, [endpoint]); unbind.Invoke(server, [endpoint]); });
+            listener = listeners[IPAddress.Loopback];
+            check(listeners.Count == 1 && BoundSockets(endpoint) == 1 && (int)listener.GetType().GetProperty("ScopeCount").GetValue(listener) == 1, "Mixed bind/unbind lost the remaining listener owner");
+            check((bool)unbind.Invoke(server, [endpoint]) && listeners.Count == 0 && BoundSockets(endpoint) == 0, "Last owner cannot close a reused listener");
+        }
+        IPEndPoint occupiedEndpoint;
+        using (var occupied = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp) { ExclusiveAddressUse = true })
+        {
+            occupied.Bind(new IPEndPoint(IPAddress.Loopback, 0)); occupiedEndpoint = (IPEndPoint)occupied.LocalEndPoint;
+            bool rejected = false;
+            try { bind.Invoke(server, [occupiedEndpoint]); }
+            catch (TargetInvocationException error) when (error.InnerException is System.Net.Sockets.SocketException) { rejected = true; }
+            check(rejected && listeners.Count == 0, "Failed binding published a listener or leaked scope references");
+        }
+        bind.Invoke(server, [occupiedEndpoint]); bind.Invoke(server, [occupiedEndpoint]);
+        var remaining = listeners[IPAddress.Loopback];
+        var remainingSocket = (System.Net.Sockets.Socket)remaining.GetType().GetProperty("Socket").GetValue(remaining);
+        server.Start();
+        server.Stop();
+        check(listeners.Count == 0 && remainingSocket.SafeHandle.IsClosed && BoundSockets(occupiedEndpoint) == 0, "Service stop discarded tracked listeners without disposing their sockets");
+        using var stopReplacement = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp) { ExclusiveAddressUse = true };
+        stopReplacement.Bind(occupiedEndpoint);
+        check(stopReplacement.IsBound, "Service-stop socket cannot be exclusively rebound");
+    }
+
     public static async Task Run()
     {
         string folder = Path.Combine(Path.GetTempPath(), "ddi-dhcp-tests-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
@@ -17,6 +96,7 @@ static class DistributedDhcpChecks
         var plan = new AllocationPlan("lab", Guid.NewGuid().ToString("N"), Ip("192.0.2.1"), Ip("192.0.2.120"), "repeatable-seed", ["east-a", "east-b", "west-a"], [new(Ip("192.0.2.4"), Ip("192.0.2.8")), new(Ip("192.0.2.7"), Ip("192.0.2.10"))]);
         try
         {
+            await CheckUdpListenerLifecycle(folder, Check);
             await CheckCrashBoundaries(folder, Check);
             await CheckLiveBootstrap(folder, Check, Reject);
             var sequence = new AllocationSequence(plan);

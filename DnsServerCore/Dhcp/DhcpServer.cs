@@ -71,6 +71,7 @@ namespace DnsServerCore.Dhcp
         readonly LogManager _log;
 
         readonly ConcurrentDictionary<IPAddress, UdpListener> _udpListeners = new ConcurrentDictionary<IPAddress, UdpListener>();
+        readonly object _udpListenerLock = new object();
 
         readonly ConcurrentDictionary<string, Scope> _scopes = new ConcurrentDictionary<string, Scope>();
 
@@ -1075,69 +1076,75 @@ namespace DnsServerCore.Dhcp
 
         private void BindUdpListener(IPEndPoint dhcpEP)
         {
-            UdpListener listener = _udpListeners.GetOrAdd(dhcpEP.Address, delegate (IPAddress key)
+            lock (_udpListenerLock)
             {
-                Socket udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
-                try
+                UdpListener listener = _udpListeners.GetOrAdd(dhcpEP.Address, delegate (IPAddress key)
                 {
-                    #region this code ignores ICMP port unreachable responses which creates SocketException in ReceiveFrom()
+                    Socket udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
-                    if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                    try
                     {
-                        const uint IOC_IN = 0x80000000;
-                        const uint IOC_VENDOR = 0x18000000;
-                        const uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
+                        #region this code ignores ICMP port unreachable responses which creates SocketException in ReceiveFrom()
 
-                        udpSocket.IOControl((IOControlCode)SIO_UDP_CONNRESET, new byte[] { Convert.ToByte(false) }, null);
+                        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                        {
+                            const uint IOC_IN = 0x80000000;
+                            const uint IOC_VENDOR = 0x18000000;
+                            const uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
+
+                            udpSocket.IOControl((IOControlCode)SIO_UDP_CONNRESET, new byte[] { Convert.ToByte(false) }, null);
+                        }
+
+                        #endregion
+
+                        //bind to interface address
+                        if (Environment.OSVersion.Platform == PlatformID.Unix)
+                            udpSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1); //to allow binding to same port with different addresses
+
+                        udpSocket.EnableBroadcast = true;
+                        udpSocket.ExclusiveAddressUse = false;
+
+                        udpSocket.Bind(dhcpEP);
+
+                        //start reading dhcp packets
+                        _ = Task.Factory.StartNew(delegate ()
+                        {
+                            return ReadUdpRequestAsync(udpSocket);
+                        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Current);
+
+                        return new UdpListener(udpSocket);
                     }
-
-                    #endregion
-
-                    //bind to interface address
-                    if (Environment.OSVersion.Platform == PlatformID.Unix)
-                        udpSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1); //to allow binding to same port with different addresses
-
-                    udpSocket.EnableBroadcast = true;
-                    udpSocket.ExclusiveAddressUse = false;
-
-                    udpSocket.Bind(dhcpEP);
-
-                    //start reading dhcp packets
-                    _ = Task.Factory.StartNew(delegate ()
+                    catch
                     {
-                        return ReadUdpRequestAsync(udpSocket);
-                    }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Current);
+                        udpSocket.Dispose();
+                        throw;
+                    }
+                });
 
-                    return new UdpListener(udpSocket);
-                }
-                catch
-                {
-                    udpSocket.Dispose();
-                    throw;
-                }
-            });
-
-            listener.IncrementScopeCount();
+                listener.IncrementScopeCount();
+            }
         }
 
         private bool UnbindUdpListener(IPEndPoint dhcpEP)
         {
-            if (_udpListeners.TryGetValue(dhcpEP.Address, out UdpListener listener))
+            lock (_udpListenerLock)
             {
-                listener.DecrementScopeCount();
-
-                if (listener.ScopeCount < 1)
+                if (_udpListeners.TryGetValue(dhcpEP.Address, out UdpListener listener))
                 {
-                    if (_udpListeners.TryRemove(dhcpEP.Address, out _))
+                    listener.DecrementScopeCount();
+
+                    if (listener.ScopeCount < 1)
                     {
-                        listener.Socket.Dispose();
-                        return true;
+                        if (_udpListeners.TryRemove(dhcpEP.Address, out _))
+                        {
+                            listener.Socket.Dispose();
+                            return true;
+                        }
                     }
                 }
-            }
 
-            return false;
+                return false;
+            }
         }
 
         private async Task<bool> ActivateScopeAsync(Scope scope, bool waitForInterface, bool throwException = false)
@@ -1493,7 +1500,13 @@ namespace DnsServerCore.Dhcp
             foreach (KeyValuePair<string, Scope> scope in _scopes)
                 UnloadScope(scope.Value, false);
 
-            _udpListeners.Clear();
+            lock (_udpListenerLock)
+            {
+                foreach (UdpListener listener in _udpListeners.Values)
+                    listener.Socket.Dispose();
+
+                _udpListeners.Clear();
+            }
 
             _state = ServiceState.Stopped;
         }

@@ -217,7 +217,8 @@ static class DistributedTransportChecks
             Field<DhcpServer>(services[0], "_dhcpServer").RemoveDnsEntries(primaryScope, Lease.Recover(stores[2].FindLease("Default", "1-0201"), false));
             var remainingRecords = new List<DnsResourceRecord>(); services[0].DnsServer.AuthZoneManager.ListAllZoneRecords("lab.example", [DnsResourceRecordType.A], remainingRecords);
             Check(remainingRecords.Any(r => r.Name == "client.lab.example"), "Expired donor lease cleanup deletes the recipient's DNS record");
-            Console.WriteLine($"PASS: {checks} three-server certificate-pinned HTTPS replication, bootstrap, authentication, link failure and grant checks; loopback fresh read/modify sessions verified.");
+            await CheckUnusedRecoveryTransport(services, originals, freshAdmins, tlsClients, names, Check);
+            Console.WriteLine($"PASS: {checks} three-server certificate-pinned HTTPS replication, bootstrap, authentication, link failure, grant and unused-owner recovery checks; loopback fresh read/modify sessions verified.");
             if (serve)
             {
                 string connectionFile = Path.Combine(AppContext.BaseDirectory, "lab-connection.json");
@@ -239,6 +240,42 @@ static class DistributedTransportChecks
             foreach (var pair in originalEnvironment) Environment.SetEnvironmentVariable(pair.Key, pair.Value);
             if (Path.GetDirectoryName(folder) != Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)) throw new Exception("Unexpected lab directory"); Directory.Delete(folder, true);
         }
+    }
+    static async Task CheckUnusedRecoveryTransport(List<DnsWebService> services, List<HttpClient> originals, List<HttpClient> admins, List<HttpClient> tokens, string[] names, Action<bool, string> check)
+    {
+        const string scopeName = "UnusedRecovery";
+        var stores = services.Select(s => Field<DistributedAllocation>(s, "_allocation")).ToArray();
+        var scopes = new List<Scope>();
+        foreach (var service in services)
+        {
+            var server = Field<DhcpServer>(service, "_dhcpServer");
+            var scope = new Scope(scopeName, false, IPAddress.Parse("198.19.1.1"), IPAddress.Parse("198.19.1.18"), IPAddress.Parse("255.255.255.0"), Field<LogManager>(service, "_log"), server) { IgnoreClientIdentifierOption = true, DnsUpdates = false };
+            await server.AddScopeAsync(scope); scopes.Add(scope);
+        }
+        var plan = scopes[0].BuildAllocationPlan(Guid.NewGuid().ToString("N"), "unused-https", names);
+        foreach (var store in stores) store.AddPlan(plan);
+        uint held = new AllocationSequence(plan).Candidates(names[2]).First();
+        stores[2].Commit(scopeName, held, "1-0203", "02-03", "held.lab.example", DateTime.UtcNow.AddHours(1));
+        string id = Guid.NewGuid().ToString("N");
+        stores[2].RecoverUnusedCapacity(scopeName, [names[0], names[1]], id, stores[2].Snapshot().Replicas.Single(r => r.Scope == scopeName && r.Node == names[2]).Sequence);
+        string state = JsonSerializer.Serialize(stores[2].Snapshot(), DistributedAllocation.JsonOptions);
+        (string Key, string Value)[] fields = [("owner", names[2]), ("scope", scopeName), ("recoveryId", id), ("state", state)];
+        check((await Call(tokens[0], "/api/ddi/dhcp/recoverUnusedOwner", fields)).GetProperty("status").GetString() == "error", "Cluster service token can authorize fenced unused recovery");
+        check((await Call(originals[0], "/api/ddi/dhcp/recoverUnusedOwner", fields)).GetProperty("status").GetString() == "error", "Plain HTTP can authorize unused recovery");
+        check((await Call(admins[2], "/api/ddi/dhcp/recoverUnusedOwner", fields)).GetProperty("status").GetString() == "error", "Failed owner imports its own recovery as a survivor");
+        for (int receiver = 0; receiver < 2; receiver++)
+        {
+            var response = await Call(admins[receiver], "/api/ddi/dhcp/recoverUnusedOwner", fields);
+            check(response.GetProperty("status").GetString() == "ok", "Direct TLS administrative unused recovery failed: " + response);
+            check((await Call(admins[receiver], "/api/ddi/dhcp/recoverUnusedOwner", fields)).GetProperty("status").GetString() == "ok", "Lost import response cannot retry the same recovery");
+            check(!stores[receiver].HasAuthority(scopeName, held), "Unused recovery imports a live donor lease as free capacity");
+        }
+        uint[] first = stores[0].GrantedAddresses(scopeName), second = stores[1].GrantedAddresses(scopeName);
+        check(first.Length == 3 && second.Length == 2 && !first.Intersect(second).Any(), "HTTPS unused recovery does not divide five addresses disjointly across two survivors");
+        var snapshot = stores[2].Snapshot(); var donor = snapshot.Replicas.Single(r => r.Scope == scopeName && r.Node == names[2]);
+        var invalid = snapshot with { Replicas = snapshot.Replicas.Where(r => r != donor).Append(donor with { UnusedRecoveries = [donor.UnusedRecoveries[0] with { Receivers = [names[1], names[0]] }] }).ToArray() };
+        check((await Call(admins[0], "/api/ddi/dhcp/recoverUnusedOwner", ("owner", names[2]), ("scope", scopeName), ("recoveryId", id), ("state", JsonSerializer.Serialize(invalid, DistributedAllocation.JsonOptions)))).GetProperty("status").GetString() == "error", "HTTPS importer accepts a conflicting recovered division");
+        check(scopes.All(s => !s.Enabled) && stores.All(s => s.Plan(scopeName).Owners.SequenceEqual(plan.Owners)), "Recovery changes serving roles or stable owner membership");
     }
     static async Task CheckLiveMigration(List<DnsWebService> services, List<HttpClient> originals, List<HttpClient> admins, List<HttpClient> peers, string[] names, Action<bool> disconnectLast, Action<string> loseLastResponse, Action<bool, string> check)
     {

@@ -22,7 +22,9 @@ namespace DnsServerCore.Dhcp
     public sealed record AllocationEntry(uint Address, string Client, string Hardware, string Host, string State, DateTime Expires, string GrantId = null, string Borrower = null, string AuthorityOwner = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AllocationProtection Protection = null);
     public sealed record AllocationEvent(long Sequence, DateTime Timestamp, AllocationEntry Before, AllocationEntry After);
-    public sealed record AllocationReplica(string Scope, string Epoch, string Node, long Sequence, AllocationEntry[] Entries, AllocationEvent[] History = null);
+    public sealed record AllocationUnusedRecovery(string Id, string[] Receivers, uint[] Addresses);
+    public sealed record AllocationReplica(string Scope, string Epoch, string Node, long Sequence, AllocationEntry[] Entries, AllocationEvent[] History = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AllocationUnusedRecovery[] UnusedRecoveries = null);
     public sealed record AllocationDevice(string Scope, string Node, AllocationEntry Lease);
     public sealed record DistributedScopeConfiguration(string Scope, long Revision, string Hash, string Data);
     public sealed record AllocationNativeSnapshot(string Node, string Scope, string Configuration, AllocationEntry[] Entries);
@@ -164,7 +166,7 @@ namespace DnsServerCore.Dhcp
             catch { _writerLock.Dispose(); throw; }
         }
         static AllocationPlan Copy(AllocationPlan p) => p with { Owners = p.Owners.ToArray(), Excluded = p.Excluded.ToArray(), Reservations = p.Reservations?.ToArray(), HaGroups = p.HaGroups?.ToArray() };
-        static AllocationReplica Copy(AllocationReplica r) => r with { Entries = r.Entries.ToArray(), History = r.History?.ToArray() };
+        static AllocationReplica Copy(AllocationReplica r) => r with { Entries = r.Entries.ToArray(), History = r.History?.ToArray(), UnusedRecoveries = r.UnusedRecoveries?.Select(x => x with { Receivers = x.Receivers.ToArray(), Addresses = x.Addresses.ToArray() }).ToArray() };
         static AllocationBootstrapRecord Copy(AllocationBootstrapRecord record) => record with { PreparedNodes = record.PreparedNodes?.ToArray() };
         public AllocationState Snapshot() { lock (_sync) return _state with { Plans = _state.Plans.Select(Copy).ToArray(), Replicas = _state.Replicas.Select(Copy).ToArray(), Configurations = _state.Configurations?.ToArray(), Bootstraps = _state.Bootstraps?.Select(Copy).ToArray(), NativeHolds = _state.NativeHolds?.ToArray() }; }
         public AllocationPlan Plan(string scope) { lock (_sync) { var p = _state.Plans.SingleOrDefault(p => p.Scope == scope); return p is null ? null : Copy(p); } }
@@ -243,6 +245,26 @@ namespace DnsServerCore.Dhcp
                 var p = state.Plans.SingleOrDefault(p => p.Scope == r.Scope) ?? throw new ArgumentException("Unknown scope.");
                 var sequence = new AllocationSequence(p);
                 if (r.Epoch != p.Epoch || !p.Owners.Contains(r.Node) || r.Sequence < 0 || r.Entries is null || r.Entries.Length > 100000 || r.Entries.Select(e => e.Address).Distinct().Count() != r.Entries.Length) throw new ArgumentException("Invalid replica.");
+                if (r.UnusedRecoveries is not null)
+                {
+                    var donorEntries = r.Entries.ToDictionary(e => e.Address);
+                    var reservedAddresses = (p.Reservations ?? []).Select(x => x.Address).ToHashSet();
+                    if (r.UnusedRecoveries.Length > 256 || r.UnusedRecoveries.Any(x => x is null) || r.UnusedRecoveries.Select(x => x.Id).Distinct().Count() != r.UnusedRecoveries.Length) throw new ArgumentException("Invalid unused-capacity recovery journal.");
+                    foreach (var recovery in r.UnusedRecoveries)
+                    {
+                        if (!Guid.TryParseExact(recovery.Id, "N", out _) || recovery.Receivers is null || recovery.Receivers.Length == 0 || recovery.Receivers.Length >= p.Owners.Length ||
+                            !recovery.Receivers.SequenceEqual(recovery.Receivers.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)) || recovery.Receivers.Any(n => n == r.Node || !p.Owners.Contains(n)) ||
+                            recovery.Addresses is null || recovery.Addresses.Length > 65536 || !recovery.Addresses.SequenceEqual(recovery.Addresses.Distinct().Order())) throw new ArgumentException("Invalid unused-capacity division.");
+                        for (int i = 0; i < recovery.Addresses.Length; i++)
+                        {
+                            uint address = recovery.Addresses[i];
+                            donorEntries.TryGetValue(address, out var grant);
+                            if (sequence.Owner(address) != r.Node || reservedAddresses.Contains(address) || grant?.State != "Grant" ||
+                                grant.GrantId != RecoveryGrantId(recovery.Id, address) || grant.Borrower != recovery.Receivers[i % recovery.Receivers.Length] || grant.Protection is not null)
+                                throw new ArgumentException("Unused-capacity recovery differs from its permanent donor grants.");
+                        }
+                    }
+                }
                 if (r.History?.Length > 2000 || r.History?.Any(h => h is null || h.Sequence < 1 || h.Sequence > r.Sequence || h.Timestamp.Kind != DateTimeKind.Utc || h.After is null || h.After.Client?.Length > 1024 || h.After.Hardware?.Length > 255 || h.After.Host?.Length > 255 || h.After.Expires.Kind != DateTimeKind.Utc || h.After.State != "Offer" && h.After.State != "Lease" && h.After.State != "Grant" && h.After.State != "Released" && h.After.State != "Declined" || sequence.Owner(h.After.Address) != r.Node && h.After.AuthorityOwner != sequence.Owner(h.After.Address)) == true || r.History?.Select(h => h.Sequence).Distinct().Count() != r.History?.Length) throw new ArgumentException("Invalid lease history.");
                 foreach (var e in r.Entries)
                 {
@@ -512,7 +534,18 @@ namespace DnsServerCore.Dhcp
                         }
                         continue; // remote state never silently overwrites local authoritative allocation state
                     }
-                    if (!replicas.TryGetValue((r.Scope, r.Node), out var current) || r.Sequence > current.Sequence) replicas[(r.Scope, r.Node)] = Copy(r);
+                    if (!replicas.TryGetValue((r.Scope, r.Node), out var current)) replicas[(r.Scope, r.Node)] = Copy(r);
+                    else if (r.Sequence > current.Sequence)
+                    {
+                        var incomingEntries = r.Entries.ToDictionary(e => e.Address);
+                        // A restored donor may produce a numerically newer snapshot.
+                        // Sequence ordering cannot revoke any permanent grant or saved
+                        // recovery division that peers already accepted.
+                        if (current.Entries.Where(e => e.State == "Grant").Any(grant => !incomingEntries.TryGetValue(grant.Address, out var incoming) || incoming != grant) ||
+                            (current.UnusedRecoveries ?? []).Any(old => !(r.UnusedRecoveries ?? []).Any(next => next.Id == old.Id && next.Receivers.SequenceEqual(old.Receivers) && next.Addresses.SequenceEqual(old.Addresses))))
+                            throw new InvalidOperationException("Replica advance would revoke permanent donor authority; recover the latest original journal before rejoining.");
+                        replicas[(r.Scope, r.Node)] = Copy(r);
+                    }
                     else if (r.Sequence == current.Sequence && JsonSerializer.Serialize(r, JsonOptions) != JsonSerializer.Serialize(current, JsonOptions)) throw new InvalidOperationException("Conflicting replica sequence.");
                 }
                 var configurations = (_state.Configurations ?? []).ToDictionary(c => c.Scope);
@@ -613,6 +646,47 @@ namespace DnsServerCore.Dhcp
                 if (!Available(scope, address)) throw new InvalidOperationException("Donor address is already held.");
                 var grant = new AllocationEntry(address, "", "", "", "Grant", DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc), requestId, borrower);
                 Mutate(scope, grant); return grant;
+            }
+        }
+        static string RecoveryGrantId(string id, uint address) => new Guid(SHA256.HashData(Encoding.UTF8.GetBytes("unused:" + id + ":" + address.ToString(System.Globalization.CultureInfo.InvariantCulture))).AsSpan(0, 16)).ToString("N");
+
+        // Offline operation on the externally fenced owner's ORIGINAL store, never a
+        // replica. The exclusive store lock excludes a running server. Its watermark
+        // binds the original identity and all permanent grants before any import.
+        public void RecoverUnusedCapacity(string scope, string[] receivers, string requestId, long expectedSequence)
+        {
+            if (!Guid.TryParseExact(requestId, "N", out _) || receivers is null || receivers.Length == 0 || receivers.Distinct(StringComparer.Ordinal).Count() != receivers.Length) throw new ArgumentException("Use a stable recovery ID and distinct surviving owners.");
+            receivers = receivers.Order(StringComparer.Ordinal).ToArray();
+            lock (_sync)
+            {
+                EnsureLocalAuthority();
+                var plan = _state.Plans.Single(p => p.Scope == scope); var local = Local(scope, plan);
+                if (BootstrapPending(scope) || !plan.Owners.Contains(NodeName()) || receivers.Any(n => n == NodeName() || !plan.Owners.Contains(n))) throw new InvalidOperationException("Recovery requires committed ownership and enrolled surviving receivers.");
+                var previous = local.UnusedRecoveries?.SingleOrDefault(x => x.Id == requestId);
+                if (previous is not null)
+                {
+                    if (!previous.Receivers.SequenceEqual(receivers)) throw new InvalidOperationException("Recovery receivers changed; retry the original division.");
+                    return;
+                }
+                if (local.Sequence != expectedSequence) throw new InvalidOperationException("Owner state changed; read its current fenced journal before recovery.");
+                if ((local.UnusedRecoveries?.Length ?? 0) >= 256) throw new InvalidOperationException("Recovery journal limit reached.");
+                var entries = local.Entries.ToDictionary(e => e.Address);
+                DateTime now = DateTime.UtcNow;
+                var addresses = _sequences[scope].Candidates(NodeName()).Where(a => !entries.TryGetValue(a, out var e) || e.State != "Grant" && (e.State == "Released" || e.Expires <= now)).Take(65537).Order().ToArray();
+                if (addresses.Length > 65536) throw new InvalidOperationException("Unused recovery exceeds 65536 addresses; no grants were written.");
+                var history = (local.History ?? []).ToList(); long sequence = local.Sequence;
+                for (int i = 0; i < addresses.Length; i++)
+                {
+                    uint address = addresses[i]; entries.TryGetValue(address, out var before);
+                    var grant = new AllocationEntry(address, "", "", "", "Grant", DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc), RecoveryGrantId(requestId, address), receivers[i % receivers.Length]);
+                    entries[address] = grant; history.Add(new(checked(++sequence), now, before, grant));
+                }
+                // Even an empty recovery advances the sequence so replicas carry the
+                // immutable retry record; replay cannot silently choose new receivers.
+                if (sequence == local.Sequence) sequence = checked(sequence + 1);
+                var next = local with { Sequence = sequence, Entries = entries.Values.ToArray(), History = history.TakeLast(2000).ToArray(), UnusedRecoveries = (local.UnusedRecoveries ?? []).Append(new(requestId, receivers, addresses)).ToArray() };
+                var state = _state with { Replicas = _state.Replicas.Where(r => r.Scope != scope || r.Node != next.Node).Append(next).ToArray() };
+                Validate(state); Save(state);
             }
         }
         // Connected-owner surrender is atomic with the existing ACK lock. A lost reply must never

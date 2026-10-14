@@ -1238,8 +1238,11 @@ namespace DnsServerCore.Dhcp
             if (_peerSelections.Count > 4096) _peerSelections.TryRemove(_peerSelections.MinBy(p => p.Value).Key, out _);
             var client = request.GetClientIdentifier(_ignoreClientIdentifierOption);
             _offers.TryRemove(client, out _); _dhcpServer.Allocation.ReleaseOffer(_name, client.ToString());
+            Interlocked.Exchange(ref _overflowRequestedTicks, 0);
         }
 
+        long _overflowRequestedTicks;
+        public DateTime? OverflowRequestedUtc { get { long ticks = Interlocked.Read(ref _overflowRequestedTicks); return ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc); } }
         async Task<Lease> GetDistributedOfferAsync(DhcpMessage request, ClientIdentifierOption clientIdentifier)
         {
             var store = _dhcpServer.Allocation; var plan = store.Plan(_name);
@@ -1276,6 +1279,7 @@ namespace DnsServerCore.Dhcp
                     // Durability precedes the offer; ACKs persist the full lease lifetime separately.
                     if (PeerSelected(request) || !store.Hold(_name, candidate, client, BitConverter.ToString(request.ClientHardwareAddress), request.HostName?.HostName, DateTime.UtcNow.AddSeconds(OFFER_EXPIRY_SECONDS))) return null;
                     if (PeerSelected(request)) { store.ReleaseOffer(_name, client); return null; }
+                    Interlocked.Exchange(ref _overflowRequestedTicks, 0);
                     return _offers[clientIdentifier] = new(LeaseType.Dynamic, clientIdentifier, null, request.ClientHardwareAddress, address, null, GetLeaseTime());
                 }
                 if (request.RequestedIpAddress is not null && sequence.Owner(AllocationSequence.Number(request.RequestedIpAddress.Address)) == store.NodeName())
@@ -1285,6 +1289,9 @@ namespace DnsServerCore.Dhcp
                 // Own sequence is exhausted. Previously acknowledged grants remain valid offline.
                 foreach (uint granted in store.GrantedAddresses(_name))
                 { var selected = await TryAddress(granted); if (selected is not null) return selected; }
+                // The external fencing controller observes demand only after this
+                // actual client request exhausted local and already-granted capacity.
+                Interlocked.CompareExchange(ref _overflowRequestedTicks, DateTime.UtcNow.Ticks, 0);
                 if (_dhcpServer.BorrowCapacity is not null)
                 {
                     // Do not hold our scope mutex while asking another owner to lock its scope.
@@ -1292,16 +1299,15 @@ namespace DnsServerCore.Dhcp
                     byte[] donorState;
                     try { donorState = await _dhcpServer.BorrowCapacity(_name, store.NodeName()); }
                     finally { await _lastAddressOfferedLock.WaitAsync(); }
+                    if (donorState is not null) store.Merge(donorState);
                     // A release may have made local capacity available while donor I/O
                     // ran outside the mutex. Prefer that capacity before overflow.
                     foreach (uint candidate in sequence.Candidates(store.NodeName()))
                     { var selected = await TryAddress(candidate); if (selected is not null) return selected; }
-                    if (donorState is not null)
-                    {
-                        store.Merge(donorState);
-                        foreach (uint granted in store.GrantedAddresses(_name))
-                        { var selected = await TryAddress(granted); if (selected is not null) return selected; }
-                    }
+                    // A fenced recovery can arrive through another session while
+                    // donor I/O is in flight, including when that I/O returns null.
+                    foreach (uint granted in store.GrantedAddresses(_name))
+                    { var selected = await TryAddress(granted); if (selected is not null) return selected; }
                 }
                 return null;
             }
@@ -1649,6 +1655,7 @@ namespace DnsServerCore.Dhcp
 
         internal void ReleaseLease(Lease lease)
         {
+            Interlocked.Exchange(ref _overflowRequestedTicks, 0);
             if (_dhcpServer.Allocation?.Plan(_name) is not null)
                 _dhcpServer.Allocation.Release(_name, AllocationSequence.Number(lease.Address), lease.ClientIdentifier.ToString());
             else

@@ -97,6 +97,7 @@ static class DistributedDhcpChecks
         try
         {
             await CheckUdpListenerLifecycle(folder, Check);
+            await CheckUnusedOwnerRecovery(folder, Check, Reject);
             await CheckCrashBoundaries(folder, Check);
             await CheckLiveBootstrap(folder, Check, Reject);
             var sequence = new AllocationSequence(plan);
@@ -347,6 +348,129 @@ static class DistributedDhcpChecks
         {
             if (Path.GetDirectoryName(folder) != Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar)) throw new Exception("Unexpected test directory");
             Directory.Delete(folder, true);
+        }
+    }
+
+    static async Task CheckUnusedOwnerRecovery(string folder, Action<bool, string> check, Action<Action, string> reject)
+    {
+        string root = Path.Combine(folder, "unused-recovery"); Directory.CreateDirectory(root);
+        await using var log = new LogManager(true, root);
+        using var serverA = new DhcpServer(Path.Combine(root, "a-config"), log);
+        using var serverB = new DhcpServer(Path.Combine(root, "b-config"), log);
+        using var serverC = new DhcpServer(Path.Combine(root, "c-config"), log);
+        Scope NewScope(DhcpServer server) => new("unused", false, IPAddress.Parse("198.18.0.10"), IPAddress.Parse("198.18.0.27"), IPAddress.Parse("255.255.255.0"), log, server) { DnsUpdates = false, IgnoreClientIdentifierOption = true };
+        using var scopeA = NewScope(serverA); using var scopeB = NewScope(serverB);
+        var plan = scopeA.BuildAllocationPlan(Guid.NewGuid().ToString("N"), "unused-recovery", ["a", "b", "c"]);
+        string PathFor(string owner) => Path.Combine(root, owner + ".json");
+        await using var a = new DistributedAllocation(PathFor("a")) { NodeName = () => "a" };
+        await using var b = new DistributedAllocation(PathFor("b")) { NodeName = () => "b" };
+        await using var c = new DistributedAllocation(PathFor("c")) { NodeName = () => "c" };
+        serverA.Allocation = a; serverB.Allocation = b;
+        foreach (var store in new[] { a, b, c }) store.AddPlan(plan);
+        var sequence = new AllocationSequence(plan); var owned = sequence.Candidates("c").ToArray();
+        var expiry = DateTime.UtcNow.AddHours(1);
+        c.Commit("unused", owned[0], "1-0200000000C8", "02-00-00-00-00-C8", "live", expiry);
+        c.Hold("unused", owned[1], "1-0200000000C9", "02-00-00-00-00-C9", "pending", expiry);
+        c.Hold("unused", owned[2], "1-0200000000CA", "02-00-00-00-00-CA", "declined", expiry); c.Decline("unused", owned[2], "1-0200000000CA");
+        byte[] before = c.Export(); long donorSequence = c.Snapshot().Replicas.Single(r => r.Node == "c").Sequence;
+        reject(() => new DistributedAllocation(PathFor("c")), "Offline recovery can open a running donor's journal");
+        await c.DisposeAsync(); // The controller has fenced the donor and stopped its service.
+        DhcpMessage Discover(byte client)
+        {
+            byte[] wire = new byte[244]; wire[0] = 1; wire[1] = 1; wire[2] = 6; wire[28] = 2; wire[33] = client;
+            new byte[] { 99, 130, 83, 99, 53, 1, 1, 255 }.CopyTo(wire, 236);
+            return new DhcpMessage(new MemoryStream(wire));
+        }
+        int triggers = 0; string id = Guid.NewGuid().ToString("N"); byte[] recovered = null;
+        serverA.BorrowCapacity = async (_, _) =>
+        {
+            triggers++;
+            check(scopeA.OverflowRequestedUtc is not null, "Real exhaustion is not visible to the external fencing controller");
+            if (recovered is not null) return null;
+            await using var original = new DistributedAllocation(PathFor("c")) { NodeName = () => "c" };
+            reject(() => original.RecoverUnusedCapacity("unused", ["a", "b"], id, donorSequence - 1), "Stale recovery sequence accepted");
+            original.RecoverUnusedCapacity("unused", ["b", "a"], id, donorSequence);
+            recovered = original.Export();
+            original.RecoverUnusedCapacity("unused", ["a", "b"], id, donorSequence); // Lost reply retry.
+            check(original.Export().SequenceEqual(recovered), "Recovery retry changes permanent grants");
+            reject(() => original.RecoverUnusedCapacity("unused", ["a"], id, donorSequence), "Same recovery ID changes receivers");
+            b.Merge(recovered); return recovered;
+        };
+        var offers = new List<Lease>();
+        for (byte i = 1; i <= 6; i++)
+        {
+            var pair = await Task.WhenAll(scopeA.GetOfferAsync(Discover(i)), scopeB.GetOfferAsync(Discover((byte)(i + 10))));
+            check(pair.All(x => x is not null), "Two survivors cannot use their original sequences while donor offline");
+            check(AllocationSequence.Number(pair[0].Address) == sequence.Candidates("a").ElementAt(i - 1) && AllocationSequence.Number(pair[1].Address) == sequence.Candidates("b").ElementAt(i - 1), "Peer outage repartitions surviving owners");
+            offers.AddRange(pair);
+        }
+        check(triggers == 0 && scopeA.OverflowRequestedUtc is null && scopeB.OverflowRequestedUtc is null, "Recovery triggered before own sequence exhaustion");
+        var overflowA = await scopeA.GetOfferAsync(Discover(31)); var overflowB = await scopeB.GetOfferAsync(Discover(32));
+        var overflowA2 = await scopeA.GetOfferAsync(Discover(33));
+        check(triggers == 1 && overflowA is not null && overflowB is not null && overflowA2 is not null, "Actual exhaustion does not activate divided unused recovery");
+        offers.AddRange([overflowA, overflowB, overflowA2]);
+        check(new[] { overflowA.Address, overflowB.Address, overflowA2.Address }.Select(AllocationSequence.Number).SequenceEqual(owned.Skip(3)), "Sorted unused ranks are not divided a,b,a");
+        check(offers.Select(x => x.Address).Distinct().Count() == 15, "Survivors issue overlapping original/overflow addresses");
+        check(await scopeA.GetOfferAsync(Discover(34)) is null && await scopeB.GetOfferAsync(Discover(35)) is null, "Protected lease/offer/quarantine is reused during recovery");
+        scopeA.CommitLease(overflowA); scopeB.CommitLease(overflowB);
+        await using var returned = new DistributedAllocation(PathFor("c")) { NodeName = () => "c" }; serverC.Allocation = returned;
+        using var scopeC = NewScope(serverC);
+        check(owned.Skip(3).All(x => !returned.HasAuthority("unused", x)), "Returning donor resurrects granted authority");
+        check(await scopeC.GetOfferAsync(Discover(99)) is null, "Returning owner duplicates a recovered grant");
+        var live = scopeC.GetExistingLeaseOrOffer(Discover(200));
+        check(live?.Address.Equals(AllocationSequence.Address(owned[0])) == true, "Recovery altered a protected active donor lease");
+        scopeC.CommitLease(live);
+        check(returned.FindLease("unused", "1-0200000000C8").Expires >= expiry, "Donor rejoin shortens protected lease");
+        await a.DisposeAsync(); await b.DisposeAsync();
+        await using var restartedA = new DistributedAllocation(PathFor("a")) { NodeName = () => "a" };
+        await using var restartedB = new DistributedAllocation(PathFor("b")) { NodeName = () => "b" };
+        serverA.Allocation = restartedA; serverB.Allocation = restartedB;
+        using var freshA = NewScope(serverA); using var freshB = NewScope(serverB);
+        check((await freshA.GetOfferAsync(Discover(31))).Address.Equals(overflowA.Address) && (await freshB.GetOfferAsync(Discover(32))).Address.Equals(overflowB.Address), "Survivor restart loses recovered leases");
+        var snapshot = returned.Snapshot(); var replica = snapshot.Replicas.Single(r => r.Node == "c");
+        var tampered = replica with { UnusedRecoveries = [replica.UnusedRecoveries[0] with { Receivers = ["b", "a"] }] };
+        reject(() => restartedA.Merge(JsonSerializer.SerializeToUtf8Bytes(snapshot with { Replicas = [tampered] }, DistributedAllocation.JsonOptions)), "Conflicting recovery division accepted");
+        var revoked = JsonSerializer.Deserialize<AllocationState>(before, DistributedAllocation.JsonOptions).Replicas.Single(r => r.Node == "c") with { Sequence = replica.Sequence + 100 };
+        reject(() => restartedA.Merge(JsonSerializer.SerializeToUtf8Bytes(snapshot with { Replicas = [revoked] }, DistributedAllocation.JsonOptions)), "Numerically newer restored donor revokes already granted capacity");
+        string stale = Path.Combine(root, "stale-donor.json"); File.WriteAllBytes(stale, before); File.Copy(PathFor("c") + ".required", stale + ".required");
+        reject(() => new DistributedAllocation(stale), "Pre-recovery donor snapshot bypasses the grant watermark");
+        string staged = Path.Combine(root, "interrupted-donor.json"); File.WriteAllBytes(staged, before); File.WriteAllBytes(staged + ".tmp", returned.Export()); File.Copy(PathFor("c") + ".required", staged + ".required");
+        await using var resumed = new DistributedAllocation(staged) { NodeName = () => "c" };
+        check(resumed.Export().SequenceEqual(returned.Export()) && owned.Skip(3).All(x => !resumed.HasAuthority("unused", x)), "Interrupted recovery loses donor grants or retry record");
+        uint reservedAddress = AllocationSequence.Number(IPAddress.Parse("198.18.1.4"));
+        var reservedPlan = plan with { Scope = "unused-reserved", First = reservedAddress - 3, Last = reservedAddress + 5, Reservations = [new(reservedAddress, "1-0201")] };
+        var reservedSequence = new AllocationSequence(reservedPlan); string reservedOwner = reservedSequence.Owner(reservedAddress);
+        await using var reservedStore = new DistributedAllocation(Path.Combine(root, "reserved.json")) { NodeName = () => reservedOwner };
+        reservedStore.AddPlan(reservedPlan);
+        reservedStore.RecoverUnusedCapacity(reservedPlan.Scope, plan.Owners.Where(n => n != reservedOwner).ToArray(), Guid.NewGuid().ToString("N"), 0);
+        check(reservedStore.HasAuthority(reservedPlan.Scope, reservedAddress) && !reservedStore.Snapshot().Replicas.Single().UnusedRecoveries.Single().Addresses.Contains(reservedAddress), "Unused recovery transfers an unleased static reservation");
+        long emptyBefore = returned.Snapshot().Replicas.Single(r => r.Node == "c").Sequence;
+        string emptyId = Guid.NewGuid().ToString("N"); returned.RecoverUnusedCapacity("unused", ["a", "b"], emptyId, emptyBefore);
+        var emptyRecovery = returned.Snapshot().Replicas.Single(r => r.Node == "c");
+        check(emptyRecovery.Sequence == emptyBefore + 1 && emptyRecovery.UnusedRecoveries.Last().Addresses.Length == 0, "Empty unused recovery lacks a durable retry boundary");
+        string cli = Environment.GetEnvironmentVariable("TEQTANIUM_RECOVERY_APP");
+        if (!string.IsNullOrEmpty(cli))
+        {
+            string cliStore = Path.Combine(root, "cli.json"), cliOutput = Path.Combine(root, "cli-output.json"), cliId = Guid.NewGuid().ToString("N");
+            var original = new DistributedAllocation(cliStore) { NodeName = () => "c" }; original.AddPlan(plan);
+            async Task<int> RunCli(string owner = "c", string output = null)
+            {
+                var start = new ProcessStartInfo(cli) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+                foreach (string argument in new[] { "--dhcp-recover-unused", cliStore, owner, "unused", "a,b", cliId, "0", output ?? cliOutput }) start.ArgumentList.Add(argument);
+                using var child = Process.Start(start); var stdout = child.StandardOutput.ReadToEndAsync(); var stderr = child.StandardError.ReadToEndAsync();
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                try { await child.WaitForExitAsync(deadline.Token); } catch { child.Kill(true); await child.WaitForExitAsync(); throw; }
+                await stdout; await stderr; return child.ExitCode;
+            }
+            check(await RunCli() != 0, "Production CLI can mutate a live writer's original journal");
+            await original.DisposeAsync();
+            check(await RunCli("wrong-owner") != 0 && !File.Exists(cliOutput), "Production CLI accepts the wrong original owner identity");
+            check(await RunCli(output: cliStore + ".required") != 0, "Production CLI overwrites the authoritative watermark with its export");
+            check(await RunCli() == 0 && File.Exists(cliOutput), "Production offline CLI does not persist/export unused recovery");
+            byte[] cliBytes = File.ReadAllBytes(cliOutput);
+            check(await RunCli() == 0 && File.ReadAllBytes(cliOutput).SequenceEqual(cliBytes), "Production CLI lost-response replay changes recovery");
+            await using var cliReturned = new DistributedAllocation(cliStore) { NodeName = () => "c" };
+            check(sequence.Candidates("c").All(x => !cliReturned.HasAuthority("unused", x)), "Production CLI donor rejoin resurrects unused capacity");
         }
     }
     static async Task CheckLiveBootstrap(string folder, Action<bool, string> check, Action<Action, string> reject)

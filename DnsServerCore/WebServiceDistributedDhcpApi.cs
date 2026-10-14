@@ -202,7 +202,7 @@ namespace DnsServerCore
             context.GetCurrentJsonWriter().WriteString("health", _allocation.Health);
             context.GetCurrentJsonWriter().WriteString("node", _allocation.NodeName());
             context.GetCurrentJsonWriter().WritePropertyName("nodes"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), _clusterManager.ClusterInitialized ? _clusterManager.ClusterNodes.Values.Select(n => n.Name).Order(StringComparer.Ordinal).ToArray() : [_allocation.NodeName()]);
-            context.GetCurrentJsonWriter().WritePropertyName("scopeStatus"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), _allocation.Snapshot().Plans.Select(p => new { scope = p.Scope, exists = _dhcpServer.GetScope(p.Scope) is not null, matchesOwnership = _dhcpServer.GetScope(p.Scope)?.MatchesAllocationPlan(p) == true, enabled = _dhcpServer.GetScope(p.Scope)?.Enabled == true }).ToArray());
+            context.GetCurrentJsonWriter().WritePropertyName("scopeStatus"); JsonSerializer.Serialize(context.GetCurrentJsonWriter(), _allocation.Snapshot().Plans.Select(p => new { scope = p.Scope, exists = _dhcpServer.GetScope(p.Scope) is not null, matchesOwnership = _dhcpServer.GetScope(p.Scope)?.MatchesAllocationPlan(p) == true, enabled = _dhcpServer.GetScope(p.Scope)?.Enabled == true, overflowRequestedUtc = _dhcpServer.GetScope(p.Scope)?.OverflowRequestedUtc }).ToArray());
         }
         void GetAllocationState(HttpContext context)
         {
@@ -334,6 +334,32 @@ namespace DnsServerCore
             }
             _allocation.Merge(JsonSerializer.SerializeToUtf8Bytes(state, DistributedAllocation.JsonOptions));
             _log.Write(GetRemoteEndPoint(context), "[" + GetSessionUser(context).Username + "] Imported durably surrendered capacity from externally fenced owner '" + owner + "'.");
+            WriteAllocationState(context);
+        }
+        void RecoverUnusedAllocation(HttpContext context)
+        {
+            RequireDhcpPermission(context, PermissionFlag.Modify);
+            if (!context.Request.IsHttps || context.GetCurrentSession().Type == UserSessionType.ClusterApiToken || context.Request.QueryOrForm("actingUser") is not null ||
+                !_authManager.IsPermitted(PermissionSection.Administration, GetSessionUser(context), PermissionFlag.Delete)) throw new DnsWebServiceException("A direct HTTPS administrative recovery session is required.");
+            string owner = AllocationNode(context.Request.GetQueryOrForm("owner"));
+            string scope = context.Request.GetQueryOrForm("scope"), id = context.Request.GetQueryOrForm("recoveryId");
+            if (owner == _allocation.NodeName()) throw new InvalidOperationException("Import recovered grants on a surviving owner.");
+            string payload = context.Request.GetQueryOrForm("state");
+            if (Encoding.UTF8.GetByteCount(payload) > 8 * 1024 * 1024) throw new ArgumentException("Recovery snapshot exceeds 8 MiB.");
+            var snapshot = JsonSerializer.Deserialize<AllocationState>(payload, DistributedAllocation.JsonOptions) ?? throw new ArgumentException("Missing original-owner recovery state.");
+            var plan = snapshot.Plans?.SingleOrDefault(p => p.Scope == scope) ?? throw new ArgumentException("Missing recovered scope.");
+            var local = _allocation.Plan(scope) ?? throw new ArgumentException("Install the identical ownership epoch first.");
+            if (JsonSerializer.Serialize(plan, DistributedAllocation.JsonOptions) != JsonSerializer.Serialize(local, DistributedAllocation.JsonOptions)) throw new ArgumentException("Recovery changes the immutable ownership plan.");
+            var donor = snapshot.Replicas?.SingleOrDefault(r => r.Scope == scope && r.Node == owner) ?? throw new ArgumentException("Missing original-owner replica.");
+            var recovery = donor.UnusedRecoveries?.SingleOrDefault(r => r.Id == id);
+            if (recovery is null || !recovery.Receivers.Contains(_allocation.NodeName())) throw new ArgumentException("This surviving owner is not a receiver in the saved recovery division.");
+            var knownDonor = _allocation.Snapshot().Replicas.SingleOrDefault(r => r.Scope == scope && r.Node == owner);
+            if (knownDonor is not null && donor.Sequence < knownDonor.Sequence) throw new InvalidOperationException("The fenced owner's journal is older than known peer evidence; retain its fence and recover the current original journal.");
+            // Only the original donor replica changes. Local and other owners' current
+            // authority must never be replaced by the failed server's older observations.
+            var replicas = _allocation.Snapshot().Replicas.Where(r => r.Scope == scope && r.Node != owner).Append(donor).ToArray();
+            _allocation.Merge(JsonSerializer.SerializeToUtf8Bytes(new AllocationState(1, [plan], replicas), DistributedAllocation.JsonOptions));
+            _log.Write(GetRemoteEndPoint(context), "[" + GetSessionUser(context).Username + "] Imported unused-capacity recovery '" + id + "' from externally fenced owner '" + owner + "' in '" + scope + "'.");
             WriteAllocationState(context);
         }
         async Task InstallAllocationPlans(AllocationState state)

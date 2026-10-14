@@ -29,6 +29,23 @@ namespace DnsServerApp
     {
         static async Task Main(string[] args)
         {
+            // Modified by Tekmyster Industries, LLC — remains GPL-3.0.
+            if (args.Length > 0 && args[0] == "--dhcp-recover-unused")
+            {
+                try
+                {
+                    if (args.Length != 8) throw new ArgumentException("Usage: --dhcp-recover-unused original-store owner scope receiver1,receiver2 recovery-id expected-sequence output-json. Stop the service and externally fence this owner first.");
+                    string storePath = System.IO.Path.GetFullPath(args[1]), outputPath = System.IO.Path.GetFullPath(args[7]);
+                    if (string.Equals(storePath, outputPath, StringComparison.OrdinalIgnoreCase) || outputPath.StartsWith(storePath + ".", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Export recovery evidence to a separate file, outside the authoritative journal and its barriers.");
+                    await using var store = new DnsServerCore.Dhcp.DistributedAllocation(args[1]) { NodeName = () => args[2] };
+                    if (store.PersistedNode != args[2]) throw new InvalidOperationException("Recovery must use the original owner's watermark-bound journal.");
+                    store.RecoverUnusedCapacity(args[3], args[4].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries), args[5], long.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture));
+                    System.IO.File.WriteAllBytes(args[7], store.Export());
+                    Console.WriteLine("Unused dynamic capacity durably surrendered. Keep the external fence until every receiver persists the grants; never restore an older owner journal.");
+                }
+                catch (Exception exception) { Console.Error.WriteLine(exception.Message); Environment.ExitCode = 1; }
+                return;
+            }
             bool throwIfBindFails = false;
             bool isPortableApp = false; //true if logs folder should be inside the config folder else will use OS specific log folder path
             string? configFolder = null;

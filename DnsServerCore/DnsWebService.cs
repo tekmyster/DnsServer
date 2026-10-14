@@ -2326,6 +2326,7 @@ namespace DnsServerCore
             _webService.MapPost("/api/ddi/dhcp/handoff", HandoffAllocation);
             _webService.MapGetAndPost("/api/ddi/dhcp/ownedAddresses", GetOwnedAllocationAddresses);
             _webService.MapPost("/api/ddi/dhcp/recoverFencedOwner", RecoverFencedAllocation);
+            _webService.MapPost("/api/ddi/dhcp/recoverUnusedOwner", RecoverUnusedAllocation);
             _webService.MapPost("/api/ddi/dhcp/prepare", PrepareAllocation);
             _webService.MapGetAndPost("/api/ddi/dhcp/history/lookup", LookupAllocationHistory);
             _webService.MapGetAndPost("/api/ipam/netbox/settings/get", GetNetBoxSettings);

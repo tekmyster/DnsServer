@@ -154,15 +154,28 @@ PY
         $null=Api $survivor 'ddi/dhcp/recoverUnusedOwner' @{owner=$failed.owner;scope=$scope;recoveryId=$operation.id;state=$snapshot} $sessions[$survivor.owner]
     }
     $operation.phase='Imported';Save $operationPath $operation
-    # Restart against its updated ORIGINAL journal before restoring network access.
-    $null=Guest $failed $vm 'set -eu; systemctl start dns.service; systemctl is-active dns.service'
-    NicState $vm $operation.adapters $true
-    $operation.freshAccess+=FreshPrivileges $failed
+    # All receivers now have the grants and the ORIGINAL journal has revoked donor
+    # authority. A cold-booted guest may need carrier before its static IP exists.
+    try {
+        NicState $vm $operation.adapters $true
+        $address=$failed.address
+        $start='set -eu; for attempt in $(seq 1 60); do if ip -4 -o address show | grep -F " '+$address+'/"; then break; fi; sleep 1; done; ip -4 -o address show | grep -F " '+$address+'/"; systemctl start dns.service; systemctl is-active dns.service'
+        $null=Guest $failed $vm $start
+        $operation.freshAccess+=FreshPrivileges $failed
+    } catch {
+        NicState $vm $operation.adapters $false
+        $operation.phase='Imported';Save $operationPath $operation
+        throw
+    }
     foreach($survivor in $survivors) {$null=Api $survivor 'settings/get' @{} $originalSessions[$survivor.owner]}
     $operation.phase='Completed';Save $operationPath $operation
 }
 try {
     if(@($configuration.nodes).Count -lt 2 -or @($configuration.nodes.owner|Select-Object -Unique).Count -ne $configuration.nodes.Count) {throw 'Configure at least two distinct pinned owners'}
+    foreach($node in $configuration.nodes) {
+        $parsed=$null
+        if($node.address -notmatch '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$' -or ![Net.IPAddress]::TryParse([string]$node.address,[ref]$parsed)) {throw 'Pin each owner to an IPv4 management address'}
+    }
     $polls=0
     do {
         $live=@();$offline=@();$states=@{}

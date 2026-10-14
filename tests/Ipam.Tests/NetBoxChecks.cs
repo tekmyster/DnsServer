@@ -64,6 +64,13 @@ static class NetBoxChecks
             Check((await connector.ApplyAsync(preview.Id, ipam.Snapshot().Revision)).Applied == 2 && stub.Writes == 2, "Preview publication did not create objects");
             await Reject(() => connector.ApplyAsync(preview.Id, ipam.Snapshot().Revision), "Submitted preview is blindly retried");
             Check((await connector.PreviewAsync(ipam.Snapshot())).Changes.All(c => c.Operation == "Unchanged"), "Idempotent reconciliation produces changes");
+            string addressMarker = stub.Objects["ip-addresses"][0]["comments"].ToString();
+            stub.Objects["ip-addresses"][0]["comments"] = "Operator notes\n\n" + addressMarker;
+            var annotated = await connector.PreviewAsync(ipam.Snapshot());
+            Check(annotated.Changes.Single(c => c.Kind == "ip-addresses").Operation == "Unchanged" && annotated.Changes.Single(c => c.Kind == "ip-addresses").Fields.Contains("Operator notes"), "Publication discards existing operator notes");
+            stub.Objects["ip-addresses"][0]["comments"] += "\nDDI:another-installation:ip-addresses:other";
+            Check((await connector.PreviewAsync(ipam.Snapshot())).Changes.Single(c => c.Kind == "ip-addresses").Operation == "Conflict", "Multiple ownership markers accepted");
+            stub.Objects["ip-addresses"][0]["comments"] = addressMarker;
             using (var restored = new NetBoxConnector(Path.Combine(folder, "restored"), new HttpClient(stub)))
             {
                 restored.RestoreConfiguration(connector.ExportConfiguration());

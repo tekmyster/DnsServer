@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -74,6 +75,11 @@ namespace DnsServerCore.Ipam
         string SettingsHash() => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(_settings, JsonOptions)));
         Uri Endpoint(string path) => new(new Uri(_settings.Url.TrimEnd('/') + "/"), path);
         string Marker(string kind, string id) => "DDI:" + _installation + ":" + kind + ":" + id;
+        static bool Owned(string comments, string marker)
+        {
+            var owners = comments.Split('\n').Select(line => line.Trim()).Where(line => line.StartsWith("DDI:", StringComparison.Ordinal)).ToArray();
+            return owners.Length == 1 && owners[0] == marker;
+        }
         async Task<(JsonElement Json, string ETag)> Request(HttpMethod method, Uri uri, string fields, string etag, CancellationToken cancellationToken)
         {
             if (!_settings.Enabled) throw new InvalidOperationException("NetBox integration is disabled.");
@@ -129,7 +135,11 @@ namespace DnsServerCore.Ipam
                     if (matches.Length > 1) { changes.Add(new(kind, id, "Conflict", null, "", fields, "Multiple NetBox objects have the same address/prefix and VRF")); return; }
                     if (matches.Length == 0) { changes.Add(new(kind, id, "Create", null, "", fields, "No matching object")); return; }
                     var remote = matches[0]; string marker = Marker(kind, id);
-                    if (Text(remote, "comments") != marker) { changes.Add(new(kind, id, "Conflict", remote.GetProperty("id").GetInt32(), Text(remote, "last_updated"), fields, "Existing object is not owned by this DDI installation")); return; }
+                    if (!Owned(Text(remote, "comments"), marker)) { changes.Add(new(kind, id, "Conflict", remote.GetProperty("id").GetInt32(), Text(remote, "last_updated"), fields, "Existing object is not owned by this DDI installation")); return; }
+                    // Preserve operator notes when ownership was explicitly established during migration.
+                    var desired = JsonNode.Parse(fields).AsObject();
+                    desired["comments"] = Text(remote, "comments");
+                    fields = desired.ToJsonString(JsonOptions);
                     using var parsed = JsonDocument.Parse(fields);
                     var before = parsed.RootElement.EnumerateObject().Where(p => remote.TryGetProperty(p.Name, out _)).ToDictionary(p => p.Name, p => remote.GetProperty(p.Name).Clone());
                     changes.Add(new(kind, id, MatchesFields(remote, parsed.RootElement) ? "Unchanged" : "Update", remote.GetProperty("id").GetInt32(), Text(remote, "last_updated"), fields, "DDI owns these mapped fields", JsonSerializer.Serialize(before, JsonOptions)));
@@ -166,7 +176,7 @@ namespace DnsServerCore.Ipam
                     if (change.Operation == "Update")
                     {
                         endpoint = new Uri(endpoint, change.RemoteId + "/"); var current = await Request(HttpMethod.Get, endpoint, null, null, cancellationToken);
-                        if (Text(current.Json, "last_updated") != change.RemoteUpdated || Text(current.Json, "comments") != Marker(change.Kind, change.LocalId)) throw new InvalidOperationException("NetBox object changed since preview.");
+                        if (Text(current.Json, "last_updated") != change.RemoteUpdated || !Owned(Text(current.Json, "comments"), Marker(change.Kind, change.LocalId))) throw new InvalidOperationException("NetBox object changed since preview.");
                         etag = current.ETag ?? throw new InvalidOperationException("NetBox must support ETag conditional writes before updates are allowed.");
                     }
                     else

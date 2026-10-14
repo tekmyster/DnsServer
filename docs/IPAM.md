@@ -4,6 +4,14 @@ IPAM owns intended network and address configuration. DNS records, DHCP leases, 
 
 ## Implemented first slice
 
+### Automatic DDI population
+
+The cluster coordinator (or standalone server) populates IPAM at startup, every 30 seconds and on inventory reads. No import action is required. Configured DHCP scope masks define exact subnets; conventional IPv4 octet-aligned and IPv6 nibble-aligned reverse zones provide additional prefixes. Classless reverse delegations do not imply a guessed subnet. Ambiguous overlaps are not merged automatically. Discovery currently targets the default network view; other views retain explicit intent.
+
+DHCP reservations, configured gateways and enabled authoritative A/AAAA/PTR records within known subnets produce source-labelled address records. Active DHCP leases remain expiring observations, including synchronized lease evidence, rather than permanent static assignments. DNS-only addresses without a known network are not assigned a guessed mask. Existing operator allocations and metadata take precedence. Discovery removes only its own stale address records and retains networks for history. Source collection or persistence failures leave the previous inventory intact; unchanged scans do not advance revision. Replicas receive coordinator inventory through the existing cluster configuration transfer.
+
+Subnet inspection exposes dynamic DHCP pools and exclusions. Next Available excludes these ranges, configured gateways, allocations and observations using interval arithmetic rather than enumerating addresses. Saving an assignment still requires the current revision and uniqueness checks; a suggestion alone makes no reservation on a device or live DHCP allocator.
+
 The module persists network views, IPv4 and IPv6 subnet and container prefixes, site and VLAN metadata, intended address assignments, and revisioned change history with before and after values. Independent network views allow overlapping private space. Subnets cannot overlap within a view unless a containing prefix is explicitly an organizational container. Containers cannot carry assignments or service links.
 
 Assignments have hostname, owner, description, and Assigned, Reserved, or Deprecated state. Each address is unique within its view. Network and broadcast addresses are excluded for ordinary IPv4 subnets; /31 and /32 are supported. IPv6 capacity and address arithmetic use arbitrary precision, and available address suggestions do not enumerate large networks.
@@ -42,7 +50,9 @@ Configure publication in the IPAM console with an HTTPS URL, `DDI_NETBOX_*_API_K
 
 Apply uses a preview ID bound to local inventory revision and settings, expiring after fifteen minutes. Updates require matching remote timestamps/provenance and ETag/If-Match support. Creates recheck natural identity before submission. A submitted preview is not automatically replayed after an uncertain HTTP outcome; a new preview reconciles remote state. Partial writes are recorded, and external changes are not globally transactional. NetBox may allow concurrent duplicate creates when another writer does not enforce uniqueness; per-object creation race protection and broader reconciliation remain work in progress. Backup includes the integration settings and installation provenance, but excludes the key.
 
-The API provides `/api/ipam/netbox/settings/get`, POST `/settings/set`, POST `/preview` and POST `/apply`. Mock tests cover provenance, conditional updates, stale intent, conflicting objects, credential/transport restrictions, lost responses and backup identity. A live NetBox instance is not configured or tested. Reverse import, automatic scheduling, deletions, site/VLAN/tenant/interface/DCIM publication, custom-field ownership, and object-specific authority modes remain unimplemented.
+The API provides `/api/ipam/netbox/settings/get`, POST `/settings/set`, POST `/preview` and POST `/apply`. Mock tests cover provenance, conditional updates, stale intent, conflicting objects, credential/transport restrictions, lost responses and backup identity. Production NetBox HTTPS authentication and conditional-write behavior have been tested; application publication remains disabled pending activation. Reverse import, automatic scheduling, deletions, site/VLAN/tenant/interface/DCIM publication, custom-field ownership, and object-specific authority modes remain unimplemented.
+
+For an operator-approved migration, back up both inventories and the NetBox database before explicitly establishing per-object ownership. A provenance marker must occupy its own line; multiple owners are rejected. Existing notes alongside a single ownership marker are preserved during previews and updates. The connector still does not adopt objects automatically. Dynamic DHCP observations must not be converted into fixed assignments merely because they appear in an external inventory.
 
 REST/authentication and conditional-write references: [NetBox REST API](https://netbox.readthedocs.io/en/stable/integrations/rest-api/), [IP address semantics](https://netbox.readthedocs.io/en/stable/models/ipam/ipaddress/), and [prefix semantics](https://netbox.readthedocs.io/en/stable/models/ipam/prefix/).
 
@@ -56,10 +66,10 @@ All software capabilities are intended to ship in the open source edition withou
 | --- | --- | --- |
 | Address planning | Hierarchy, views, IPv4/IPv6, ownership, site/VLAN metadata, conflict validation | First slice implemented |
 | Full network model | VRF identifiers, tenants, site hierarchy, VLAN objects/groups, devices/interfaces, ranges, roles, custom fields and tags | Pending |
-| Utilization and reconciliation | Intended versus observed usage with provenance and drift findings | Linked local and synchronized DHCP observations implemented; bounded historical DHCP lookup available; discovery pending |
+| Utilization and reconciliation | Intended versus observed usage with provenance and drift findings | Automatic local DDI population, linked local/synchronized DHCP observations and bounded historical DHCP lookup implemented; active network discovery pending |
 | Address and prefix allocation | Atomic intent allocation, exclusion-aware available prefixes, live allocation holds | Address suggestions implemented; atomic provisioning and prefix allocation pending |
 | DNS and DHCP orchestration | Validate, preview, deploy, acknowledge, compensate failed changes, and track applied revisions | Explicit read integration implemented; deployment workflow pending |
-| Discovery | Passive lease events and approved active/cloud/device collectors with confidence and timestamps | Pending |
+| Discovery | Passive lease evidence and approved active/cloud/device collectors with confidence and timestamps | Automatic configuration/lease evidence implemented; active/cloud/device collectors pending |
 | Governance | Per-object RBAC, delegated views, approvals, scheduled changes, immutable external audit export | Existing Settings permission reuse and local change history implemented; delegation and workflow pending |
 | Integration | NetBox source ownership, external IDs, diff preview, idempotency, conflict queues, webhooks | DDI-owned prefix/address publication with previews, provenance and conditional updates implemented; reverse/DCIM integration pending |
 | Availability and scale | Transactional indexed storage, controlled multi-node ownership, recovery, pagination, load tests | Single-process snapshot store implemented; enterprise storage and availability pending |

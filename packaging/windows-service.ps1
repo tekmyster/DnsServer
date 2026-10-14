@@ -1,5 +1,5 @@
 param([Parameter(Mandatory=$true)][string]$AppDir,
-      [string]$DataDir = (Join-Path $env:ProgramData 'Tectanium DDI Server'),
+      [string]$DataDir = (Join-Path $env:ProgramData 'teQnatium DDI Server'),
       [ValidateRange(1,65535)][int]$DnsPort=53,
       [ValidateRange(1024,65535)][int]$ConsolePort=5380,
       [switch]$Check, [switch]$Uninstall)
@@ -22,7 +22,7 @@ if ($Uninstall) {
     Write-Output 'Service removed. Configuration and backups retained.'
     exit 0
 }
-if ($existing) { throw 'Tectanium is already installed. Export a backup and use the documented manual upgrade procedure.' }
+if ($existing) { throw 'teQnatium is already installed. Export a backup and use the documented manual upgrade procedure.' }
 if (Test-Path -LiteralPath (Join-Path $dataPath 'auth.config')) { throw 'Existing configuration detected. Use a new directory and import a backup after installation.' }
 if ($appPath.Equals($dataPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'Use separate application and configuration directories.' }
 $occupied = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in $DnsPort,$ConsolePort }) + @(Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq $DnsPort })
@@ -32,7 +32,7 @@ if ($Check) { exit 0 }
 New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
 $created = $false
 try {
-    New-Service -Name $serviceName -DisplayName 'Tectanium DDI Server' -BinaryPathName ('"' + $executable + '" "' + $dataPath + '"') -StartupType Manual | Out-Null
+    New-Service -Name $serviceName -DisplayName 'teQnatium DDI Server' -BinaryPathName ('"' + $executable + '" "' + $dataPath + '"') -StartupType Manual | Out-Null
     $created = $true
     # Use LocalService with this service's own SID for configuration access. Never start as LocalSystem.
     $configured = Invoke-CimMethod -InputObject (Get-CimInstance Win32_Service -Filter "Name='$serviceName'") -MethodName Change -Arguments @{StartName='NT AUTHORITY\LocalService';StartPassword=''}

@@ -12,18 +12,18 @@ static class SyslogChecks
     {
         int checks = 0;
         void Check(bool value, string message) { if (!value) throw new Exception(message); checks++; }
-        string folder = Path.Combine(Path.GetTempPath(), "tectanium-syslog-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
+        string folder = Path.Combine(Path.GetTempPath(), "teqnatium-syslog-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
         try {
             using var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
             int port = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
-            await using (var sender = new SyslogForwarder(folder, () => "tectanium-test.example")) {
+            await using (var sender = new SyslogForwarder(folder, () => "teqnatium-test.example")) {
                 Check(!sender.Settings.Enabled && !sender.SendTest(), "Disabled forwarding must not submit a message.");
                 await sender.ConfigureAsync(new(Enabled:true, Server:"127.0.0.1", Port:port), 0);
                 Check(sender.SendTest(), "UDP test was not queued.");
                 var first = await udp.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(5));
                 string wire = new UTF8Encoding(false, true).GetString(first.Buffer);
-                Check(Regex.IsMatch(wire, @"^<134>1 \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z tectanium-test\.example Tectanium \d+ test - "), "Collector could not parse RFC 5424 header.");
-                Check(wire.Contains("Tectanium syslog forwarding test"), "Test content missing.");
+                Check(Regex.IsMatch(wire, @"^<134>1 \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z teqnatium-test\.example teQnatium \d+ test - "), "Collector could not parse RFC 5424 header.");
+                Check(wire.Contains("teQnatium syslog forwarding test"), "Test content missing.");
                 sender.RecordSecurity(new DnsServerCore.Security.SecurityEvent("unicode",DateTime.UtcNow,"test","DNS","127.0.0.1","bad.example","A","Refused","Block",0,null,
                     Enumerable.Range(0,4).Select(i=>new DnsServerCore.Security.ThreatIndicator(i.ToString(),"Domain",new string('漢',253),"Block",new string('漢',64))).ToArray(),null,new string('漢',1024)));
                 var security=await udp.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(5));string securityWire=new UTF8Encoding(false,true).GetString(security.Buffer);

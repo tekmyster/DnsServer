@@ -1,0 +1,49 @@
+# License boundaries
+
+## Publication hold
+
+The owner's latest instruction requires all fork-specific code differences to remain private. Do not publish pending changes to a public repository or distribute their source or binaries as public release assets. Private build and deployment work may continue. PUBLICATION-HOLD.txt enforces the hold in public packaging. Previously published history is not made confidential by this policy and previously granted licenses are not revoked.
+
+Keeping modifications unpublished is separate from their license: upstream modifications retain GPL-3.0 notices and applicable distribution obligations. Do not replace those notices with proprietary headers. Independently authored private extensions follow the new-file rules below.
+
+The root LICENSE remains GNU GPL-3.0. This policy records the owner's instructions for future private development; it does not change licenses already granted or grant an exception to upstream GPL obligations.
+
+## Upstream and existing GPL files
+
+Every file present in Technitium DNS Server at fork time, and every modification to those files, remains GPL-3.0. Preserve original copyright headers and license notices. Moving, renaming, or wrapping GPL code does not change its license. Do not copy GPL implementation into private files.
+
+Previously published GPL files also retain their existing license. In particular, these existing Windows service files are part of the public GPL application, not newly created private files:
+
+- `Tectanium.WindowsService/Program.cs`
+- `Tectanium.WindowsService/Tectanium.WindowsService.csproj`
+
+These files were already present at commit `e59c2ed4ba7d6a483ab3e94d6e4b91c62a912cc3`. This is a specific historical exception to the new-file path rule, not permission to add private code to that project.
+
+## New private files
+
+New original files created in the following paths are designated private by the owner:
+
+- `Apps/Tectanium.*`
+- `Tectanium.*/**`
+- `DnsServerCore/**/Tectanium/**`
+- `docs/tectanium/**`
+- `packaging/tectanium/**`
+
+Files explicitly bearing the owner's All Rights Reserved header are also private, regardless of path. Add this exact notice at the top of each new private file, using comment delimiters required by its format:
+
+```text
+// Copyright (c) 2026 Tekmyster LLC. All Rights Reserved.
+// Proprietary and Confidential — Private Commercial License.
+// This file is NOT licensed under GPL-3.0 and may not be redistributed.
+// Contact: licensing@tekmyster.com
+```
+
+Record every new private file by repository-relative path in PRIVATE-FILES.txt and add a corresponding entry to THIRD-PARTY-NOTICES.md. Keep its source and binaries out of public Git history, source archives, containers, installers, and release assets. The path inventory contains no private implementation.
+
+Never add this notice to upstream modifications or previously GPL-distributed files. If provenance is uncertain, preserve/default to GPL-3.0 and ask the owner before creating a private implementation.
+
+## Integration and release checks
+
+Private extensions should be independent services communicating through an API, without copied GPL logic. A folder, header, or interface call alone does not establish a separate licensed work. In-process linking and plugins require review of GPL obligations before distribution. See the [GNU license FAQ on combined programs and aggregation](https://www.gnu.org/licenses/gpl-faq.en.html#MereAggregation).
+
+`scripts/check-public-license.ps1` rejects private inventory entries, new files in reserved private paths, and private notices in source candidates before public packaging. The existing GPL Windows wrapper is explicitly allowed. This is a publication guard, not a determination of legal independence or a license-provenance audit of every historical file. Do not bypass it to distribute a private extension; use a separate private repository and release pipeline.

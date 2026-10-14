@@ -1,4 +1,4 @@
-# Tectanium DDI Server API Documentation
+# teQnatium DDI Server API Documentation
 
 Technitium DNS Server provides a HTTP API which is used by the web console to perform all actions. Thus any action that the web console does can be performed using this API from your own applications.
 
@@ -632,7 +632,7 @@ RESPONSE:
 		"updateMessage": "Follow the instructions from the link below to update the DNS server to the latest version. Read the change logs before installing the update to know if there are any breaking changes.",
 		"downloadLink": "https://download.technitium.com/dns/DnsServerSetup.zip",
 		"instructionsLink": "https://blog.technitium.com/2017/11/running-dns-server-on-ubuntu-linux.html",
-		"changeLogLink": "https://github.com/tekmyster/Tectanium-DDI-Server/blob/master/CHANGELOG.md"
+		"changeLogLink": "https://github.com/tekmyster/teQnatium-DDI-Server/blob/master/CHANGELOG.md"
 	},
 	"status": "ok"
 }

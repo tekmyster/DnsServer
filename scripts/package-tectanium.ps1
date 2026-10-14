@@ -2,6 +2,7 @@ param([Parameter(Mandatory=$true)][ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+-alph
       [ValidateSet('portable','win-x64','linux-x64','linux-arm64')][string]$Runtime='portable')
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+& (Join-Path $root 'scripts/check-public-license.ps1') -RepositoryRoot $root
 $output=Join-Path $root "artifacts/packages/$Version"
 $payload=Join-Path $output $Runtime
 if (Test-Path -LiteralPath $payload) { throw 'Use a new output directory for an immutable package.' }
@@ -28,11 +29,11 @@ if ($Runtime -eq 'portable') {
     Copy-Item -LiteralPath (Join-Path $root 'packaging/start.sh'),(Join-Path $root 'packaging/start.cmd') -Destination $payload
 }
 $extension=if ($Runtime -eq 'win-x64') { 'zip' } else { 'tar.gz' }
-$archive=Join-Path $output "Tectanium-$Version-$Runtime.$extension"
+$archive=Join-Path $output "teQnatium-$Version-$Runtime.$extension"
 & python (Join-Path $root 'packaging/package.py') $payload $archive --version $Version --runtime $Runtime
 if ($LASTEXITCODE -ne 0) { throw 'Package validation failed.' }
 if ($Runtime -eq 'portable') {
-    & python (Join-Path $root 'packaging/package.py') $payload (Join-Path $output "Tectanium-$Version-portable.zip") --version $Version --runtime $Runtime
+    & python (Join-Path $root 'packaging/package.py') $payload (Join-Path $output "teQnatium-$Version-portable.zip") --version $Version --runtime $Runtime
     if ($LASTEXITCODE -ne 0) { throw 'Portable ZIP failed.' }
 }
 Write-Output $archive

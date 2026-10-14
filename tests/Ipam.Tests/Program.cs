@@ -77,6 +77,28 @@ try
     IpamManager failing = new IpamManager(Path.Combine(failingPath, "ipam.json"));
     try { failing.PutView(0, "test", "", "NeverSaved", ""); throw new Exception("Save unexpectedly succeeded"); } catch (IOException) { passed++; }
     Check(failing.Snapshot().Revision == 0 && failing.Snapshot().Views.Length == 1, "Failed save changed in-memory state");
+    var automatic = new IpamManager(Path.Combine(folder, "automatic.json"));
+    IpamDiscoveredNetwork[] discoveredNetworks = [new("10.20.30.0/24", "Servers", "Servers", "example", "DhcpScope")];
+    IpamDiscoveredAddress[] discoveredAddresses = [new("10.20.30.10", "reserved.example", "client1", "Reserved", "DhcpReservation"), new("10.20.30.11", "static.example", "example", "Assigned", "DnsRecord"), new("203.0.113.10", "outside.example", "example", "Assigned", "DnsRecord")];
+    Check(automatic.SynchronizeDiscovery(discoveredNetworks, discoveredAddresses), "Empty inventory was not automatically populated");
+    Check(automatic.Snapshot().Subnets.Length == 1 && automatic.Snapshot().Assignments.Length == 2, "Discovery inferred an unknown subnet or omitted known addresses");
+    var autoState = automatic.Snapshot();
+    Check(!automatic.SynchronizeDiscovery(discoveredNetworks, discoveredAddresses) && automatic.Snapshot().Revision == autoState.Revision, "Unchanged discovery invalidated allocation revisions");
+    Check(new IpamManager(Path.Combine(folder, "automatic.json")).Snapshot().Assignments.Length == 2, "Discovery was not durable");
+    Check(automatic.SynchronizeDiscovery(discoveredNetworks, discoveredAddresses.Take(1)), "Deleted DNS record remained assigned");
+    Check(automatic.Snapshot().Assignments.Single().Id == autoState.Assignments.Single(a => a.Source == "DhcpReservation").Id, "Discovery changed stable assignment identity");
+    var autoSubnet = automatic.Snapshot().Subnets.Single();
+    automatic.PutAssignment(automatic.Snapshot().Revision, "operator", "", autoSubnet.Id, "10.20.30.12", "intent.example", "Operations", "Assigned", "Powered off server");
+    automatic.SynchronizeDiscovery(discoveredNetworks, []);
+    Check(automatic.Snapshot().Assignments.Single().HostName == "intent.example", "Discovery deleted operator allocation intent");
+    Check(automatic.NextAvailable(autoSubnet.Id, ["10.20.30.1"], [new("10.20.30.2", "10.20.30.200", "DhcpPool")]) == "10.20.30.201", "Static allocation entered the DHCP pool");
+    Reject(() => automatic.NextAvailable(autoSubnet.Id, [], [new("10.20.30.1", "10.20.30.254", "DhcpPool")]), "Full DHCP pool returned a static candidate");
+    var preserved = automatic.Export();
+    Reject(() => automatic.SynchronizeDiscovery(discoveredNetworks, [new("invalid", "", "", "Assigned", "DnsRecord")]), "Malformed discovery was accepted");
+    Check(preserved.SequenceEqual(automatic.Export()), "Failed source snapshot changed inventory");
+    var offNetwork = AddSubnet(automatic, "default", "10.50.0.0/16");
+    automatic.SynchronizeDiscovery([new("10.50.1.0/24", "Overlap", "Overlap", "", "DhcpScope")], []);
+    Check(!automatic.Snapshot().Subnets.Any(s => s.DhcpScope == "Overlap"), "Discovery silently merged overlapping leaf networks");
     Console.WriteLine($"PASS: {passed} IPAM checks");
 }
 finally

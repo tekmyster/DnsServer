@@ -2,6 +2,8 @@ using DnsServerCore.Auth;
 using DnsServerCore.Cluster;
 using DnsServerCore.Dhcp;
 using DnsServerCore.Ipam;
+using DnsServerCore.Dns.ResourceRecords;
+using DnsServerCore.Dns.Zones;
 using Microsoft.AspNetCore.Http;
 using System;
 using System.Collections.Generic;
@@ -16,6 +18,107 @@ namespace DnsServerCore
 {
     public partial class DnsWebService
     {
+        readonly object _ipamDiscoveryLock = new object();
+        System.Threading.Timer _ipamDiscoveryTimer;
+
+        void RefreshIpamDiscovery()
+        {
+            lock (_ipamDiscoveryLock)
+            {
+                if (_dhcpServer is null || _dnsServer is null || _clusterManager is null) return;
+                // Replicas receive coordinator inventory through existing cluster configuration sync.
+                if (_clusterManager.ClusterInitialized && _clusterManager.GetSelfNode().Type != ClusterNodeType.Primary) return;
+                List<IpamDiscoveredNetwork> networks = [];
+                List<IpamDiscoveredAddress> addresses = [];
+                HashSet<string> dynamicAddresses = [];
+                var scopes = _dhcpServer.Scopes.Values.ToArray();
+                foreach (Scope scope in scopes)
+                {
+                    int length = 0;
+                    bool zero = false;
+                    foreach (byte value in scope.SubnetMask.GetAddressBytes())
+                        for (int bit = 7; bit >= 0; bit--)
+                        {
+                            bool one = (value & (1 << bit)) != 0;
+                            if (one && zero) throw new InvalidOperationException("DHCP scope has a non-contiguous subnet mask.");
+                            if (one) length++; else zero = true;
+                        }
+                    string zone = (scope.DomainName ?? "").TrimEnd('.').ToLowerInvariant();
+                    if (_dnsServer.AuthZoneManager.GetAuthZoneInfo(zone) is null) zone = "";
+                    networks.Add(new(scope.NetworkAddress + "/" + length, scope.Name, scope.Name, zone, "DhcpScope"));
+                    foreach (Lease lease in scope.Leases.Values)
+                        if (lease.LeaseExpires > DateTime.UtcNow) dynamicAddresses.Add(lease.Address.ToString());
+                    foreach (Lease lease in scope.ReservedLeases)
+                    {
+                        string host = lease.HostName ?? "";
+                        if (host.Length > 0 && !host.Contains('.') && !string.IsNullOrEmpty(scope.DomainName)) host += "." + scope.DomainName.TrimEnd('.');
+                        addresses.Add(new(lease.Address.ToString(), host, lease.ClientIdentifier.ToString(), "Reserved", "DhcpReservation"));
+                    }
+                    if (scope.RouterAddress is not null && !scope.RouterAddress.Equals(IPAddress.Any))
+                        addresses.Add(new(scope.RouterAddress.ToString(), "", scope.Name, "Reserved", "DhcpGateway"));
+                }
+                foreach (var device in scopes.SelectMany(scope => _allocation.LiveLeases(scope.Name))) dynamicAddresses.Add(AllocationSequence.Address(device.Lease.Address).ToString());
+                foreach (var zone in _dnsServer.AuthZoneManager.GetAllZones())
+                {
+                    if (zone.Disabled || (zone.Type != AuthZoneType.Primary && zone.Type != AuthZoneType.Secondary)) continue;
+                    string prefix = ReverseZonePrefix(zone.Name);
+                    if (prefix is not null) networks.Add(new(prefix, zone.Name, "", zone.Name, "DnsReverseZone"));
+                    List<DnsResourceRecord> records = [];
+                    _dnsServer.AuthZoneManager.ListAllZoneRecords(zone.Name, [DnsResourceRecordType.A, DnsResourceRecordType.AAAA, DnsResourceRecordType.PTR], records);
+                    foreach (var record in records)
+                    {
+                        if (record.GetAuthGenericRecordInfo().Disabled) continue;
+                        IPAddress address = RecordAddress(record);
+                        if (address is null || IPAddress.IsLoopback(address) || dynamicAddresses.Contains(address.ToString())) continue;
+                        // A lingering DNS record in a dynamic pool must not become static intent after lease expiry.
+                        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && scopes.Any(s => IpamNetwork.Number(address) >= IpamNetwork.Number(s.StartingAddress) && IpamNetwork.Number(address) <= IpamNetwork.Number(s.EndingAddress) && !s.IsAddressExcluded(address))) continue;
+                        addresses.Add(new(address.ToString(), record.RDATA is DnsPTRRecordData ptr ? ptr.Domain : record.Name, zone.Name, "Assigned", "DnsRecord"));
+                    }
+                }
+                if (_ipam.SynchronizeDiscovery(networks, addresses) && _clusterManager.ClusterInitialized)
+                    _clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
+            }
+        }
+
+        static string ReverseZonePrefix(string name)
+        {
+            if (name.EndsWith(".in-addr.arpa", StringComparison.OrdinalIgnoreCase))
+            {
+                var labels = name[..^13].Split('.');
+                if (labels.Length < 1 || labels.Length > 4 || labels.Any(l => !byte.TryParse(l, out _))) return null;
+                var bytes = labels.Reverse().Select(byte.Parse).Concat(Enumerable.Repeat((byte)0, 4 - labels.Length)).ToArray();
+                if (bytes[0] == 127 || bytes[0] == 0) return null;
+                return new IpamNetwork(new IPAddress(bytes) + "/" + labels.Length * 8).Prefix;
+            }
+            if (name.EndsWith(".ip6.arpa", StringComparison.OrdinalIgnoreCase))
+            {
+                var labels = name[..^9].Split('.');
+                if (labels.Length < 1 || labels.Length > 32 || labels.Any(l => l.Length != 1 || !Uri.IsHexDigit(l[0]))) return null;
+                string hex = string.Concat(labels.Reverse()).PadRight(32, '0');
+                return new IpamNetwork(new IPAddress(Convert.FromHexString(hex)) + "/" + labels.Length * 4).Prefix;
+            }
+            return null;
+        }
+
+        static IPAddress RecordAddress(DnsResourceRecord record)
+        {
+            if (record.RDATA is DnsARecordData a) return a.Address;
+            if (record.RDATA is DnsAAAARecordData aaaa) return aaaa.Address;
+            if (record.RDATA is DnsPTRRecordData)
+            {
+                string prefix = ReverseZonePrefix(record.Name);
+                if (prefix is not null && (prefix.EndsWith("/32", StringComparison.Ordinal) || prefix.EndsWith("/128", StringComparison.Ordinal)))
+                    return IPAddress.Parse(prefix.Split('/')[0]);
+            }
+            return null;
+        }
+
+        void TryRefreshIpamDiscovery()
+        {
+            try { RefreshIpamDiscovery(); }
+            catch (Exception ex) { _log.Write("IPAM automatic discovery failed; existing inventory was retained.", ex); }
+        }
+
         sealed class WebServiceIpamApi
         {
             readonly DnsWebService _service;
@@ -48,6 +151,7 @@ namespace DnsServerCore
             public void List(HttpContext context)
             {
                 Authorize(context, PermissionFlag.View);
+                _service.RefreshIpamDiscovery();
                 Write(context, "inventory", _service._ipam.Snapshot());
             }
             public void SetView(HttpContext context)
@@ -105,6 +209,8 @@ namespace DnsServerCore
                         if (lease.LeaseExpires > DateTime.UtcNow && network.Contains(lease.Address)) result.Add(new IpamObservation(lease.Address.ToString(), "DhcpLease", scope.Name, lease.HostName, lease.ClientIdentifier.ToString(), lease.LeaseExpires));
                     foreach (Lease lease in scope.ReservedLeases)
                         if (network.Contains(lease.Address)) result.Add(new IpamObservation(lease.Address.ToString(), "DhcpReservation", scope.Name, lease.HostName, lease.ClientIdentifier.ToString(), null));
+                    if (scope.RouterAddress is not null && !scope.RouterAddress.Equals(IPAddress.Any) && network.Contains(scope.RouterAddress))
+                        result.Add(new IpamObservation(scope.RouterAddress.ToString(), "DhcpGateway", scope.Name, "", "", null));
                     foreach (var device in _service._allocation.LiveLeases(subnet.DhcpScope))
                     {
                         var lease = device.Lease;
@@ -116,12 +222,17 @@ namespace DnsServerCore
                 {
                     if (!_service._authManager.IsPermitted(PermissionSection.Zones, subnet.DnsZone, user, PermissionFlag.View)) throw new DnsWebServiceException("DNS zone view permission is required for this subnet's observations.");
                     if (_service._dnsServer.AuthZoneManager.GetAuthZoneInfo(subnet.DnsZone) is null) throw new InvalidOperationException("Linked DNS zone is unavailable on this node.");
+                }
+                foreach (var zone in _service._dnsServer.AuthZoneManager.GetAllZones())
+                {
+                    if (zone.Disabled || (zone.Type != AuthZoneType.Primary && zone.Type != AuthZoneType.Secondary) || !_service._authManager.IsPermitted(PermissionSection.Zones, zone.Name, user, PermissionFlag.View)) continue;
                     List<DnsResourceRecord> records = [];
-                    _service._dnsServer.AuthZoneManager.ListAllZoneRecords(subnet.DnsZone, [DnsResourceRecordType.A, DnsResourceRecordType.AAAA], records);
+                    _service._dnsServer.AuthZoneManager.ListAllZoneRecords(zone.Name, [DnsResourceRecordType.A, DnsResourceRecordType.AAAA, DnsResourceRecordType.PTR], records);
                     foreach (DnsResourceRecord record in records)
                     {
-                        IPAddress address = record.RDATA switch { DnsARecordData a => a.Address, DnsAAAARecordData aaaa => aaaa.Address, _ => null };
-                        if (address is not null && network.Contains(address)) result.Add(new IpamObservation(address.ToString(), "DnsRecord", subnet.DnsZone, record.Name, "", null));
+                        if (record.GetAuthGenericRecordInfo().Disabled) continue;
+                        IPAddress address = RecordAddress(record);
+                        if (address is not null && network.Contains(address)) result.Add(new IpamObservation(address.ToString(), "DnsRecord", zone.Name, record.RDATA is DnsPTRRecordData ptr ? ptr.Domain : record.Name, "", null));
                     }
                 }
                 return result;
@@ -130,6 +241,7 @@ namespace DnsServerCore
             public void Inspect(HttpContext context)
             {
                 User user = Authorize(context, PermissionFlag.View);
+                _service.RefreshIpamDiscovery();
                 string subnetId = context.Request.GetQueryOrForm("subnetId");
                 IpamSnapshot state = _service._ipam.Snapshot();
                 IpamSubnet subnet = state.Subnets.SingleOrDefault(s => s.Id == subnetId) ?? throw new ArgumentException("Unknown subnet.");
@@ -139,6 +251,7 @@ namespace DnsServerCore
                 int used = intended.Concat(observations.Select(o => o.Address)).Distinct().Count();
                 Write(context, "subnet", subnet);
                 Write(context, "observations", observations);
+                Write(context, "ranges", AddressRanges(subnet, user));
                 Write(context, "findings", _service._ipam.Reconcile(subnetId, observations));
                 var assets = state.Assignments.Where(a => a.SubnetId == subnetId).Select(a => (a.Address, a.HostName, Source: "IPAM intent"))
                     .Concat(observations.Select(o => (o.Address, o.HostName, Source: o.Source))).Distinct().ToArray();
@@ -157,11 +270,27 @@ namespace DnsServerCore
             public void NextAvailable(HttpContext context)
             {
                 User user = Authorize(context, PermissionFlag.View);
+                _service.RefreshIpamDiscovery();
                 string subnetId = context.Request.GetQueryOrForm("subnetId");
                 IpamSubnet subnet = _service._ipam.Snapshot().Subnets.SingleOrDefault(s => s.Id == subnetId) ?? throw new ArgumentException("Unknown subnet.");
                 // A suggestion is not a DHCP claim or a reservation. Revision checks protect intent writes.
-                Write(context, "address", _service._ipam.NextAvailable(subnetId, Observations(subnet, user).Select(o => o.Address)));
+                Write(context, "address", _service._ipam.NextAvailable(subnetId, Observations(subnet, user).Select(o => o.Address), AddressRanges(subnet, user)));
                 Write(context, "revision", _service._ipam.Snapshot().Revision);
+            }
+
+            IpamAddressRange[] AddressRanges(IpamSubnet subnet, User user)
+            {
+                var network = new IpamNetwork(subnet.Prefix);
+                List<IpamAddressRange> ranges = [];
+                foreach (var scope in _service._dhcpServer.Scopes.Values)
+                {
+                    if (!network.Contains(scope.StartingAddress) && !network.Contains(scope.EndingAddress) && !(new IpamNetwork(scope.NetworkAddress + "/32").Bits == network.Bits && IpamNetwork.Number(scope.StartingAddress) <= network.First && IpamNetwork.Number(scope.EndingAddress) >= network.Last)) continue;
+                    if (!_service._authManager.IsPermitted(PermissionSection.DhcpServer, user, PermissionFlag.View)) throw new DnsWebServiceException("DHCP view permission is required to check dynamic pools.");
+                    ranges.Add(new(scope.StartingAddress.ToString(), scope.EndingAddress.ToString(), "DhcpPool"));
+                    foreach (var exclusion in scope.Exclusions ?? []) ranges.Add(new(exclusion.StartingAddress.ToString(), exclusion.EndingAddress.ToString(), "DhcpExclusion"));
+                    if (scope.RouterAddress is not null && !scope.RouterAddress.Equals(IPAddress.Any)) ranges.Add(new(scope.RouterAddress.ToString(), scope.RouterAddress.ToString(), "Gateway"));
+                }
+                return ranges.ToArray();
             }
         }
     }

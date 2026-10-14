@@ -54,7 +54,9 @@ static class MigrationChecks
             Check((await Call(source.Client, "/api/zones/create", ("zone", "portable.example"), ("type", "Primary"), ("catalog", "cluster-catalog.source.migration.test"))).GetProperty("status").GetString() == "ok", "Source zone create failed");
             Check((await Call(source.Client, "/api/zones/records/add", ("domain", "host.portable.example"), ("zone", "portable.example"), ("type", "A"), ("ipAddress", "192.0.2.42"), ("ttl", "600"))).GetProperty("status").GetString() == "ok", "Source record create failed");
             await Call(source.Client, "/api/settings/set", ("defaultRecordTtl", "600"));
-            await Call(source.Client, "/api/ipam/subnets/set", ("revision", "0"), ("prefix", "192.0.2.0/24"), ("name", "Transferred network"));
+            var sourceInventory = (await Call(source.Client, "/api/ipam/list")).GetProperty("response").GetProperty("inventory");
+            string discoveredSubnetId = sourceInventory.GetProperty("subnets").EnumerateArray().Single(s => s.GetProperty("prefix").GetString() == "192.0.2.0/24").GetProperty("id").GetString();
+            Check((await Call(source.Client, "/api/ipam/subnets/set", ("revision", sourceInventory.GetProperty("revision").GetInt64().ToString()), ("id", discoveredSubnetId), ("prefix", "192.0.2.0/24"), ("name", "Transferred network"))).GetProperty("status").GetString() == "ok", "Source IPAM intent setup failed");
             var originalLease = (await Call(source.Client, "/api/dhcp/leases/list")).GetProperty("response").GetProperty("leases")[0];
             var sourcePolicy = JsonSerializer.Deserialize<SecurityPolicy>((await Call(source.Client, "/api/security/policy/get")).GetProperty("response").GetProperty("policy").GetRawText(), DdiSecurityManager.JsonOptions);
             sourcePolicy = sourcePolicy with { Indicators = [new ThreatIndicator("migration-ioc", "Domain", "bad.portable.example", "Block", "Migration test")], Misp = new MispSettings(false, "https://misp.migration.test/") };
@@ -137,7 +139,7 @@ static class MigrationChecks
             Check(!(await Preview(fresh, package)).GetProperty("response").GetProperty("canImport").GetBoolean(), "Active deployment accepted migration");
             Check((await Call(fresh, "/api/settings/migration/import", ("review", id))).GetProperty("status").GetString() != "ok", "Completed review replayed");
             var inventory = (await Call(fresh, "/api/ipam/list")).GetProperty("response").GetProperty("inventory");
-            Check(inventory.GetProperty("subnets").GetArrayLength() == 1, "IPAM intent not transferred");
+            Check(inventory.GetProperty("subnets").EnumerateArray().Any(s => s.GetProperty("name").GetString() == "Transferred network" && s.GetProperty("prefix").GetString() == "192.0.2.0/24"), "IPAM intent not transferred");
             Console.WriteLine("Passed " + passed + " migration checks.");
             if (serve)
             {

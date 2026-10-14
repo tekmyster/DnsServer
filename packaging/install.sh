@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-version=0.1.0-alpha.3
+version=0.1.0-alpha.4
 archive=''
 checksums=''
 stage_only=0
@@ -21,14 +21,15 @@ console_port="${TECTANIUM_CONSOLE_PORT:-5380}"
 [[ "$console_port" =~ ^[0-9]+$ ]] && [ "$console_port" -ge 1024 ] && [ "$console_port" -le 65535 ] || { echo 'Invalid console port.' >&2; exit 1; }
 if [ "$stage_only" = 0 ]; then
   command -v systemctl >/dev/null || { echo 'Use the portable package on systems without systemd.' >&2; exit 1; }
-  [ ! -e /etc/systemd/system/tectanium-ddi.service ] || { echo 'Existing Tectanium deployment detected. Use --stage-only, then follow the upgrade guide.' >&2; exit 1; }
-  [ ! -e /etc/tectanium-ddi/auth.config ] || { echo 'Existing configuration detected. Import a backup into a new deployment instead.' >&2; exit 1; }
+  [ ! -e /etc/systemd/system/tectanium-ddi.service ] || { echo 'Existing teQnatium deployment detected. Use --stage-only, then follow the upgrade guide.' >&2; exit 1; }
+  [ ! -e /etc/teqnatium-ddi/auth.config ] || { echo 'Existing configuration detected. Import a backup into a new deployment instead.' >&2; exit 1; }
+  [ ! -e /etc/tectanium-ddi/auth.config ] || { echo 'Existing configuration detected. Use the migration guide.' >&2; exit 1; }
 fi
-install -d -m 755 /opt/tectanium-ddi/releases
-work=$(mktemp -d /opt/tectanium-ddi/releases/.stage-XXXXXXXX)
+install -d -m 755 /opt/teqnatium-ddi/releases
+work=$(mktemp -d /opt/teqnatium-ddi/releases/.stage-XXXXXXXX)
 trap 'rm -rf -- "$work"' EXIT
-asset="Tectanium-$version-linux-$arch.tar.gz"
-url="https://github.com/tekmyster/Tectanium-DDI-Server/releases/download/v$version"
+asset="teQnatium-$version-linux-$arch.tar.gz"
+url="https://github.com/tekmyster/teQnatium-DDI-Server/releases/download/v$version"
 if [ -z "$archive" ]; then curl --fail --location --proto '=https' --proto-redir '=https' "$url/$asset" -o "$work/$asset"; archive="$work/$asset"; fi
 if [ -z "$checksums" ]; then curl --fail --location --proto '=https' --proto-redir '=https' "$url/SHA256SUMS" -o "$work/SHA256SUMS"; checksums="$work/SHA256SUMS"; fi
 expected=$(awk -v name="$asset" '$2==name {print $1}' "$checksums")
@@ -59,33 +60,33 @@ with tarfile.open(sys.argv[1],'r:gz') as tar:
     actual={f.relative_to(root).as_posix() for f in root.rglob('*') if f.is_file() and f.name!='BUILD-SHA256SUMS'}
     if actual!=listed: raise SystemExit('Manifest coverage mismatch.')
 PY
-destination="/opt/tectanium-ddi/releases/$version-${expected:0:12}"
+destination="/opt/teqnatium-ddi/releases/$version-${expected:0:12}"
 [ ! -e "$destination" ] || { echo 'This package is already staged; its files will not be overwritten.' >&2; exit 1; }
 "$work/payload/DnsServerApp" --icu-test
 mv "$work/payload" "$destination"
 if [ "$stage_only" = 1 ]; then echo "Verified package staged at $destination. Service configuration is unchanged."; exit 0; fi
-id tectanium-ddi >/dev/null 2>&1 || useradd --system --user-group --no-create-home --shell /usr/sbin/nologin tectanium-ddi
-install -d -o tectanium-ddi -g tectanium-ddi -m 700 /etc/tectanium-ddi /var/log/tectanium-ddi
+id teqnatium-ddi >/dev/null 2>&1 || useradd --system --user-group --no-create-home --shell /usr/sbin/nologin teqnatium-ddi
+install -d -o teqnatium-ddi -g teqnatium-ddi -m 700 /etc/teqnatium-ddi /var/log/teqnatium-ddi
 python3 - <<'PY'
 import pathlib,secrets
-p=pathlib.Path('/etc/tectanium-ddi/initial-admin-password.txt');p.write_text(secrets.token_urlsafe(32));p.chmod(0o600)
+p=pathlib.Path('/etc/teqnatium-ddi/initial-admin-password.txt');p.write_text(secrets.token_urlsafe(32));p.chmod(0o600)
 PY
-chown -R tectanium-ddi:tectanium-ddi /etc/tectanium-ddi
+chown -R teqnatium-ddi:teqnatium-ddi /etc/teqnatium-ddi
 cat > "$work/tectanium-ddi.service" <<UNIT
 [Unit]
-Description=Tectanium DDI Server
+Description=teQnatium DDI Server
 After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-User=tectanium-ddi
-Group=tectanium-ddi
+User=teqnatium-ddi
+Group=teqnatium-ddi
 WorkingDirectory=$destination
-ExecStart=$destination/DnsServerApp --stop-if-bind-fails /etc/tectanium-ddi
+ExecStart=$destination/DnsServerApp --stop-if-bind-fails /etc/teqnatium-ddi
 Environment=DNS_SERVER_WEB_SERVICE_LOCAL_ADDRESSES=127.0.0.1
 Environment=DNS_SERVER_WEB_SERVICE_HTTP_PORT=$console_port
-Environment=DNS_SERVER_LOG_FOLDER_PATH=/var/log/tectanium-ddi
-Environment=DNS_SERVER_ADMIN_PASSWORD_FILE=/etc/tectanium-ddi/initial-admin-password.txt
+Environment=DNS_SERVER_LOG_FOLDER_PATH=/var/log/teqnatium-ddi
+Environment=DNS_SERVER_ADMIN_PASSWORD_FILE=/etc/teqnatium-ddi/initial-admin-password.txt
 Restart=on-failure
 RestartSec=10
 UMask=0077
@@ -93,7 +94,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/etc/tectanium-ddi /var/log/tectanium-ddi
+ReadWritePaths=/etc/teqnatium-ddi /var/log/teqnatium-ddi
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 [Install]
@@ -104,10 +105,10 @@ systemctl daemon-reload
 systemctl start tectanium-ddi.service
 ready=0
 for attempt in $(seq 1 30); do
-  if python3 "$destination/check-service.py" "http://127.0.0.1:$console_port" /etc/tectanium-ddi/initial-admin-password.txt --dns-port "${TECTANIUM_TEST_DNS_PORT:-53}"; then ready=1; break; fi
+  if python3 "$destination/check-service.py" "http://127.0.0.1:$console_port" /etc/teqnatium-ddi/initial-admin-password.txt --dns-port "${TECTANIUM_TEST_DNS_PORT:-53}"; then ready=1; break; fi
   sleep 1
 done
 if [ "$ready" = 0 ]; then systemctl stop tectanium-ddi.service; echo 'Administrative or DNS validation failed. The service is stopped; configuration is retained. Inspect journalctl -u tectanium-ddi.service.' >&2; exit 1; fi
 systemctl enable tectanium-ddi.service
-echo "Installed Tectanium DDI Server. Console: http://127.0.0.1:$console_port/"
-echo 'Initial admin credential: /etc/tectanium-ddi/initial-admin-password.txt'
+echo "Installed teQnatium DDI Server. Console: http://127.0.0.1:$console_port/"
+echo 'Initial admin credential: /etc/teqnatium-ddi/initial-admin-password.txt'

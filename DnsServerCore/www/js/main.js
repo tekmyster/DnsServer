@@ -283,8 +283,8 @@ $(function () {
 
     var headerHtml = $("#header").html();
 
-    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/tectanium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">Tectanium</span></a>" + headerHtml + "</div>");
-    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/Tectanium-DDI-Server\" target=\"_blank\">Tectanium source</a> | <a href=\"https://github.com/tekmyster/Tectanium-DDI-Server/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
+    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/teqnatium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">teQnatium</span></a>" + headerHtml + "</div>");
+    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/teQnatium-DDI-Server\" target=\"_blank\">teQnatium source</a> | <a href=\"https://github.com/tekmyster/teQnatium-DDI-Server/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
 
     loadQuickBlockLists();
     loadQuickForwardersList();
@@ -663,7 +663,7 @@ $(function () {
 
 function showAbout() {
     if ($("#pageLogin").is(":visible")) {
-        window.open("https://tekmyster.com", "_blank");
+        window.open("https://arqilo.com", "_blank");
     }
     else {
         $("#mainPanelTabListDashboard").removeClass("active");
@@ -1165,7 +1165,7 @@ function updateDnsSettingsDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.uptimestamp = responseJSON.response.uptimestamp; //update timestamp since server may have restarted during current session
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "Tectanium DDI Server · " + (responseJSON.response.productVersion || "Development");
+    document.title = responseJSON.response.dnsServerDomain + " - " + "teQnatium DDI Server · " + (responseJSON.response.productVersion || "Development");
     $("#lblAboutVersion").text(responseJSON.response.productVersion || "Development");
     $("#lblAboutUptime").text(moment(responseJSON.response.uptimestamp).local().format("lll") + " (" + moment(responseJSON.response.uptimestamp).fromNow() + ")");
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);

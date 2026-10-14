@@ -1,12 +1,12 @@
 # Optional model assistance
 
-Tectanium connects to an independently operated model server through the widely implemented OpenAI-compatible Chat Completions HTTP interface. This is a compatibility interface, not a claim of a formally standardized protocol. No vendor SDK or model subscription is required by Tectanium. The model server handles CPU/GPU selection and model loading; Tectanium does not provision a GPU or install model weights.
+teQnatium connects to an independently operated model server through the widely implemented OpenAI-compatible Chat Completions HTTP interface. This is a compatibility interface, not a claim of a formally standardized protocol. No vendor SDK or model subscription is required by teQnatium. The model server handles CPU/GPU selection and model loading; teQnatium does not provision a GPU or install model weights.
 
 ## Connect a model
 
 1. Run a model server that supports `/v1/chat/completions`, such as [Ollama](https://github.com/ollama/ollama/blob/main/docs/api/openai-compatibility.mdx) or [vLLM](https://docs.vllm.ai/en/stable/serving/online_serving/openai_compatible_server/). Choose a model that fits the server's available memory.
 2. In Security > Protection settings > Model assistance, enter the complete endpoint and the exact served model name. A same-host example is `http://127.0.0.1:11434/v1/chat/completions`. HTTP requires a literal loopback address; a separate GPU server requires HTTPS and Allow a network endpoint. DNS names such as localhost do not qualify for insecure loopback access.
-3. If the server requires authentication, set a `DDI_LLM_*_API_KEY` environment variable on the Tectanium service and enter its name under Credential reference. The policy stores only that reference, never the key. Configure credentials on each node that will request analysis. Configuring a reference does not set an environment variable.
+3. If the server requires authentication, set a `DDI_LLM_*_API_KEY` environment variable on the teQnatium service and enter its name under Credential reference. The policy stores only that reference, never the key. Configure credentials on each node that will request analysis. Configuring a reference does not set an environment variable.
 4. Enable event explanations and save. An administrator can choose View evidence > Explain event for a recent event. Model analysis is on demand; there is no automatic telemetry upload.
 
 By default, requests omit full query names, domains, client addresses, MAC addresses, DHCP client identifiers, hostnames, site names and raw threat-source evidence. They include selected detector features and scores, sample/coverage metadata, protocol outcome and whether DHCP attribution exists. Include registered domains is an explicit opt-in and still omits full query names. Requests go to the configured endpoint; Allow a network endpoint authorizes that destination, including a separate LAN model server.

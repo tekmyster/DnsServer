@@ -5,10 +5,10 @@
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 		<Authors>Shreyas Zare</Authors>
-		<Company>Tectanium contributors</Company>
-		<Product>Tectanium DDI Server</Product>
+		<Company>teQnatium contributors</Company>
+		<Product>teQnatium DDI Server</Product>
 		<PackageProjectUrl>https://technitium.com/dns/</PackageProjectUrl>
-		<RepositoryUrl>https://github.com/tekmyster/Tectanium-DDI-Server</RepositoryUrl>
+		<RepositoryUrl>https://github.com/tekmyster/teQnatium-DDI-Server</RepositoryUrl>
 		<RepositoryType></RepositoryType>
 		<Description></Description>
 		<PackageId>DnsServer</PackageId>
@@ -157,13 +157,13 @@
 		<Content Include="www\css\amber-mode.css">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
-		<Content Include="www\css\tectanium.css">
+		<Content Include="www\css\teqnatium.css">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
-        <Content Include="www\img\tectanium.svg">
+        <Content Include="www\img\teqnatium.svg">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
-        <Content Include="dohwww\img\tectanium.svg">
+        <Content Include="dohwww\img\teqnatium.svg">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
         <Content Include="www\css\dark-mode.css">

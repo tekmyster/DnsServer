@@ -1,12 +1,12 @@
 <Project>
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'DnsServerCore' Or '$(MSBuildProjectName)' == 'DnsServerApp' Or '$(MSBuildProjectName)' == 'Tectanium.WindowsService'">
-    <Version>0.1.0-alpha.3</Version>
-    <InformationalVersion>0.1.0-alpha.3</InformationalVersion>
+    <Version>0.1.0-alpha.4</Version>
+    <InformationalVersion>0.1.0-alpha.4</InformationalVersion>
     <FileVersion>0.1.0.0</FileVersion>
     <!-- Preserve the engine identity used by existing app and cluster compatibility checks. -->
     <AssemblyVersion>15.6.1.0</AssemblyVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-    <Product>Tectanium DDI Server</Product>
-    <Company>Tekmyster</Company>
+    <Product>teQnatium DDI Server</Product>
+    <Company>Arqilo</Company>
   </PropertyGroup>
 </Project>

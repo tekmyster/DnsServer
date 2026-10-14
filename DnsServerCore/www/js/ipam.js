@@ -30,32 +30,32 @@ function refreshIpam() {
         ipamInventory.subnets.forEach(function (s) {
             var row = $('<tr>');
             var view = ipamInventory.views.find(function (v) { return v.id === s.viewId; });
-            [view ? view.name : s.viewId, s.name, s.prefix, s.container ? "Container" : "Subnet", s.site, s.vlan || "", s.dhcpScope || "", s.dnsZone || ""].forEach(function (value) { row.append($('<td>').text(value)); });
+            [view ? view.name : s.viewId, s.name, s.prefix, s.container ? "Container" : "Subnet", s.site, s.vlan || "", s.dhcpScope || "", s.dnsZone || "", s.source ? productLabel(s.source) : 'IPAM'].forEach(function (value) { row.append($('<td>').text(value)); });
             var actions = $('<td>');
             if (permissions.canModify) actions.append($('<button class="btn btn-xs btn-default">').text("Edit").on('click', function () {
                 $('#ipamSubnetId').val(s.id); $('#ipamView').val(s.viewId); $('#ipamPrefix').val(s.prefix); $('#ipamSubnetName').val(s.name);
                 $('#ipamSite').val(s.site); $('#ipamVlan').val(s.vlan || ''); $('#ipamDhcpScope').val(s.dhcpScope); $('#ipamDnsZone').val(s.dnsZone); $('#ipamContainer').prop('checked', s.container);
                 $('#ipamNetworkEditor').prop('open', true); $('#ipamPrefix').trigger('focus');
             }));
-            if (permissions.canDelete) actions.append($('<button class="btn btn-xs btn-danger">').text("Delete").on('click', function () { ipamDelete('subnet', s.id); }));
+            if (permissions.canDelete && !s.source) actions.append($('<button class="btn btn-xs btn-danger">').text("Delete").on('click', function () { ipamDelete('subnet', s.id); }));
             row.append(actions); table.append(row);
         });
-        productEmptyRow(table, 9, 'No networks yet. Add an IPv4 or IPv6 subnet to start your inventory.');
+        productEmptyRow(table, 10, 'No configured DHCP or reverse DNS networks.');
         var assignments = $("#ipamAssignmentsBody").empty();
         ipamInventory.assignments.forEach(function (a) {
             var row = $('<tr>');
             var subnet = ipamInventory.subnets.find(function (s) { return s.id === a.subnetId; });
-            [subnet ? subnet.name : a.subnetId, a.address, a.hostName, a.owner, a.status, a.description].forEach(function (value) { row.append($('<td>').text(value)); });
+            [subnet ? subnet.name : a.subnetId, a.address, a.hostName, a.owner, a.status, a.description, a.source ? productLabel(a.source) : 'IPAM'].forEach(function (value) { row.append($('<td>').text(value)); });
             var actions = $('<td>');
             if (permissions.canModify) actions.append($('<button class="btn btn-xs btn-default">').text("Edit").on('click', function () {
                 $('#ipamAssignmentId').val(a.id); $('#ipamSubnet').val(a.subnetId); $('#ipamAddress').val(a.address); $('#ipamHostName').val(a.hostName);
                 $('#ipamOwner').val(a.owner); $('#ipamStatus').val(a.status); $('#ipamDescription').val(a.description);
                 $('#ipamAssignmentEditor').prop('open', true); $('#ipamAddress').trigger('focus');
             }));
-            if (permissions.canDelete) actions.append($('<button class="btn btn-xs btn-danger">').text("Delete").on('click', function () { ipamDelete('assignment', a.id); }));
+            if (permissions.canDelete && !a.source) actions.append($('<button class="btn btn-xs btn-danger">').text("Delete").on('click', function () { ipamDelete('assignment', a.id); }));
             row.append(actions); assignments.append(row);
         });
-        productEmptyRow(assignments, 7, 'No address assignments yet.');
+        productEmptyRow(assignments, 8, 'No address assignments yet.');
         var history = $('#ipamHistory').empty();
         ipamInventory.changes.slice(-20).reverse().forEach(function (c) { history.append($('<li>').text(productTime(c.timestamp) + ' · ' + c.actor + ' · ' + productLabel(c.operation))); });
         $('#ipamInspection').empty();
@@ -108,6 +108,9 @@ function inspectIpam() {
         var threats = $('<ul>');
         (data.securityFindings || []).forEach(function (f) { threats.append($('<li>').text(f.address + ' — ' + f.action + ' — ' + f.source + ' — ' + f.reason + ' Indicators: ' + f.indicators.join(', '))); });
         if ((data.securityFindings || []).length) output.append($('<h4>').text('Threat intelligence matches')).append(threats);
+        var ranges = $('<ul>');
+        (data.ranges || []).forEach(function (r) { ranges.append($('<li>').text(productLabel(r.kind) + ' · ' + r.start + ' – ' + r.end)); });
+        if ((data.ranges || []).length) output.append($('<h4>').text('DHCP ranges')).append(ranges);
         var observations = $('<ul>');
         data.observations.forEach(function (o) { observations.append($('<li>').text(o.address + ' — ' + productLabel(o.source) + ' — ' + (o.hostName || '') + ' — ' + (o.clientIdentifier || ''))); });
         output.append($('<h4>').text('DNS and DHCP observations')).append(observations);

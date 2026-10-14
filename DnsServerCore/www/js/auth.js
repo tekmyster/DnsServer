@@ -53,7 +53,7 @@ $(function () {
                     localStorage.setItem("token", sessionData.token);
 
                     $("#mnuUserDisplayName").text(sessionData.displayName);
-                    document.title = sessionData.info.dnsServerDomain + " - " + "Tectanium DDI Server · " + (sessionData.info.productVersion || "Development");
+                    document.title = sessionData.info.dnsServerDomain + " - " + "teQnatium DDI Server · " + (sessionData.info.productVersion || "Development");
                     $("#lblAboutVersion").text(sessionData.info.productVersion || "Development");
                     $("#lblAboutUptime").text(moment(sessionData.info.uptimestamp).local().format("lll") + " (" + moment(sessionData.info.uptimestamp).fromNow() + ")");
                     $("#lblDnsServerDomain").text(" - " + sessionData.info.dnsServerDomain);
@@ -273,7 +273,7 @@ function login(username, password) {
             localStorage.setItem("token", sessionData.token);
 
             $("#mnuUserDisplayName").text(sessionData.displayName);
-            document.title = sessionData.info.dnsServerDomain + " - " + "Tectanium DDI Server · " + (sessionData.info.productVersion || "Development");
+            document.title = sessionData.info.dnsServerDomain + " - " + "teQnatium DDI Server · " + (sessionData.info.productVersion || "Development");
             $("#lblAboutVersion").text(sessionData.info.productVersion || "Development");
             $("#lblAboutUptime").text(moment(sessionData.info.uptimestamp).local().format("lll") + " (" + moment(sessionData.info.uptimestamp).fromNow() + ")");
             $("#lblDnsServerDomain").text(" - " + sessionData.info.dnsServerDomain);

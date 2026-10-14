@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -65,7 +65,7 @@ namespace DnsServerApp
                 if (!isPortableApp)
                     isPortableApp = configFolder is null; //no config folder specified so run as portable app
 
-                // Tectanium releases must not redirect users to an upstream installer.
+                // teQnatium releases must not redirect users to an upstream installer.
                 service = new DnsWebService(isPortableApp, configFolder);
                 await service.StartAsync(throwIfBindFails);
 
@@ -97,7 +97,7 @@ namespace DnsServerApp
                 else
                     serviceUrl = $"http://{Environment.MachineName.ToLowerInvariant()}:{service.WebServiceHttpPort}";
 
-                Console.WriteLine($"Tectanium DDI Server {service.ProductVersion} was started successfully.\r\nStarted on: {service.UpTimeStamp.ToLocalTime()} Local Time\r\nUsing config folder: {service.ConfigFolder}\r\n\r\nNote: Open {serviceUrl} in web browser to access web console.\r\n\r\nPress [CTRL + C] to stop...");
+                Console.WriteLine($"teQnatium DDI Server {service.ProductVersion} was started successfully.\r\nStarted on: {service.UpTimeStamp.ToLocalTime()} Local Time\r\nUsing config folder: {service.ConfigFolder}\r\n\r\nNote: Open {serviceUrl} in web browser to access web console.\r\n\r\nPress [CTRL + C] to stop...");
 
                 waitHandle.WaitOne();
             }
@@ -113,7 +113,7 @@ namespace DnsServerApp
                 service?.Dispose();
                 psr?.Dispose();
 
-                Console.WriteLine("Tectanium DDI Server was stopped successfully.");
+                Console.WriteLine("teQnatium DDI Server was stopped successfully.");
                 exitHandle.Set();
             }
         }

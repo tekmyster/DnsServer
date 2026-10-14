@@ -22,7 +22,7 @@ static class PackageChecks
     {
         if (args[0]=="--prepare-package") { await Prepare(Path.GetFullPath(args[1]),int.Parse(args[2]));return; }
         string executable=Path.GetFullPath(args[1]);
-        string folder=Path.Combine(Path.GetTempPath(),"tectanium-package-"+Guid.NewGuid().ToString("N"));
+        string folder=Path.Combine(Path.GetTempPath(),"teqnatium-package-"+Guid.NewGuid().ToString("N"));
         int dnsPort=Port(),webPort=Port();await Prepare(folder,dnsPort);
         string passwordFile=Path.Combine(folder,"credential.txt");File.WriteAllText(passwordFile,Guid.NewGuid().ToString("N")+"Aa!9");
         ProcessStartInfo start=new(executable.EndsWith(".dll")?"dotnet":executable) { UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Path.GetDirectoryName(executable)! };

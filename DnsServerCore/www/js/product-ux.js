@@ -5,6 +5,8 @@ var productLabels = Object.freeze({
     SecondaryForwarder: 'Secondary forwarder', SecondaryCatalog: 'Secondary catalog',
     DomainSuffix: 'Domain and subdomains', Domain: 'Exact domain', Network: 'IP address or network',
     DhcpLease: 'DHCP lease', DhcpReservation: 'DHCP reservation', DnsRecord: 'DNS record',
+    DhcpScope: 'DHCP scope', DnsReverseZone: 'Reverse DNS zone', DhcpGateway: 'DHCP gateway',
+    DhcpPool: 'Dynamic pool', DhcpExclusion: 'Excluded range', Gateway: 'Gateway', 'discovery.sync': 'Inventory refreshed',
     Investigating: 'Investigating', Confirmed: 'Confirmed', Resolved: 'Resolved',
     UnmanagedObservedAddress: 'Unassigned observed address', MissingDnsRecord: 'Missing DNS record',
     'subnet.set': 'Network saved', 'view.set': 'Network view saved', 'assignment.set': 'Assignment saved',

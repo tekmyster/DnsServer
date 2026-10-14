@@ -16,7 +16,7 @@ Use the same term for the same concept across screens. Describe fields and actio
 
 ## Visual and interaction design
 
-Follow the existing Bootstrap components, themes and Tectanium brand. Maintain clear hierarchy, disciplined spacing, consistent typography and aligned controls. Avoid decorative clutter or invented visual conventions. Support narrow layouts, accessible contrast, meaningful labels, keyboard interaction and intentional focus. Each screen needs a clear purpose and obvious primary action.
+Follow the existing Bootstrap components, themes and teQnatium brand. Maintain clear hierarchy, disciplined spacing, consistent typography and aligned controls. Avoid decorative clutter or invented visual conventions. Support narrow layouts, accessible contrast, meaningful labels, keyboard interaction and intentional focus. Each screen needs a clear purpose and obvious primary action.
 
 ## Engineering boundaries
 
@@ -58,4 +58,4 @@ This verification does not exercise every record subtype, destructive operation,
 
 Backup/migration verification: readable backup choices, a named New Deployment dialog, package preview and desktop/390-pixel layouts were inspected. Browser import confirmed success feedback, refreshed settings and disabled replay controls; initial focus moves to the package input. ZIP responses and rollback are tested through native API fixtures. Browser Blob-download filesystem completion was not observable through the in-app automation event.
 
-Tectanium branding verification: the console shell, sign-in, About, desktop Dashboard/Security/DHCP and all 14 main section first views at 390 pixels were inspected. None of those mobile views had page-level horizontal overflow. The public DNS setup page was inspected through a local static server; its live encrypted DNS endpoint was not retested. Shared presentation checks and the Linux publish passed. Existing preferences remain available; new browsers default to dark grey. Every dialog, subtab and alternate theme state was not re-exercised in this branding pass. Original SVG/1024-pixel PNG and light/transparent variants are preserved in `docs/branding`.
+teQnatium branding verification: the console shell, sign-in, About, desktop Dashboard/Security/DHCP and all 14 main section first views at 390 pixels were inspected. None of those mobile views had page-level horizontal overflow. The public DNS setup page was inspected through a local static server; its live encrypted DNS endpoint was not retested. Shared presentation checks and the Linux publish passed. Existing preferences remain available; new browsers default to dark grey. Every dialog, subtab and alternate theme state was not re-exercised in this branding pass. Original SVG/1024-pixel PNG and light/transparent variants are preserved in `docs/branding`.

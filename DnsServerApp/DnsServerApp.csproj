@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -9,14 +9,14 @@
 		<ApplicationIcon>../DnsServerCore/www/favicon.ico</ApplicationIcon>
 		<Version>15.6.1</Version>
 		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-		<Company>Tectanium contributors</Company>
-		<Product>Tectanium DDI Server</Product>
+		<Company>teQnatium contributors</Company>
+		<Product>teQnatium DDI Server</Product>
 		<Authors>Shreyas Zare</Authors>
 		<AssemblyName>DnsServerApp</AssemblyName>
 		<RootNamespace>DnsServerApp</RootNamespace>
 		<StartupObject>DnsServerApp.Program</StartupObject>
 		<PackageProjectUrl>https://technitium.com/dns/</PackageProjectUrl>
-		<RepositoryUrl>https://github.com/tekmyster/Tectanium-DDI-Server</RepositoryUrl>
+		<RepositoryUrl>https://github.com/tekmyster/teQnatium-DDI-Server</RepositoryUrl>
 	</PropertyGroup>
 
 	<ItemGroup>

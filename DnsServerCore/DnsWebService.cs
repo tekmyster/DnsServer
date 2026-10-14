@@ -3118,6 +3118,8 @@ namespace DnsServerCore
                 //start dns and dhcp
                 await _dnsServer.StartAsync(throwIfBindFails);
                 _dhcpServer.Start();
+                TryRefreshIpamDiscovery();
+                _ipamDiscoveryTimer = new Timer(_ => TryRefreshIpamDiscovery(), null, 30000, 30000);
                 _security.Start();
                 _allocation.Start(SynchronizeAllocation);
 
@@ -3139,6 +3141,11 @@ namespace DnsServerCore
             try
             {
                 //stop cluster manager
+                if (_ipamDiscoveryTimer is not null)
+                {
+                    await _ipamDiscoveryTimer.DisposeAsync();
+                    _ipamDiscoveryTimer = null;
+                }
                 _clusterManager?.Dispose();
 
                 //stop web service

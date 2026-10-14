@@ -9,18 +9,18 @@
 #endif
 [Setup]
 AppId={{55F45C41-7E50-43B4-9D0B-CA1F0334F1A8}
-AppName=Tectanium DDI Server
+AppName=teQnatium DDI Server
 AppVersion={#ReleaseVersion}
-AppPublisher=Tekmyster
-AppPublisherURL=https://github.com/tekmyster/Tectanium-DDI-Server
-DefaultDirName={autopf}\Tectanium DDI Server
-DefaultGroupName=Tectanium DDI Server
+AppPublisher=Arqilo
+AppPublisherURL=https://github.com/tekmyster/teQnatium-DDI-Server
+DefaultDirName={autopf}\teQnatium DDI Server
+DefaultGroupName=teQnatium DDI Server
 DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 OutputDir={#OutputPath}
-OutputBaseFilename=Tectanium-{#ReleaseVersion}-windows-x64-setup
+OutputBaseFilename=teQnatium-{#ReleaseVersion}-windows-x64-setup
 SetupIconFile={#PackageDir}\www\favicon.ico
 UninstallDisplayIcon={app}\www\favicon.ico
 LicenseFile={#PackageDir}\LICENSE
@@ -30,12 +30,12 @@ WizardStyle=modern
 SetupLogging=yes
 CloseApplications=no
 RestartApplications=no
-UninstallDisplayName=Tectanium DDI Server
+UninstallDisplayName=teQnatium DDI Server
 [Files]
 Source: "{#PackageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{group}\Open console"; Filename: "http://127.0.0.1:{param:ConsolePort|5380}/"
-Name: "{group}\Project and downloads"; Filename: "https://github.com/tekmyster/Tectanium-DDI-Server/releases"
+Name: "{group}\Project and downloads"; Filename: "https://github.com/tekmyster/teQnatium-DDI-Server/releases"
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\windows-service.ps1"" -AppDir ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveTectaniumService"
 [Code]

@@ -106,7 +106,7 @@ function updateAdminClusterDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.clusterDomain = responseJSON.response.clusterDomain;
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "Tectanium DDI Server · " + (responseJSON.response.productVersion || "Development");
+    document.title = responseJSON.response.dnsServerDomain + " - " + "teQnatium DDI Server · " + (responseJSON.response.productVersion || "Development");
     $("#lblAboutVersion").text(responseJSON.response.productVersion || "Development");
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);
 }

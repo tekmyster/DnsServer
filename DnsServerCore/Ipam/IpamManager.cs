@@ -10,8 +10,11 @@ using System.Text.Json.Serialization;
 namespace DnsServerCore.Ipam
 {
     public sealed record IpamView(string Id, string Name, string Description);
-    public sealed record IpamSubnet(string Id, string ViewId, string Prefix, string Name, string Site, int? Vlan, string DhcpScope, string DnsZone, bool Container = false);
-    public sealed record IpamAssignment(string Id, string SubnetId, string Address, string HostName, string Owner, string Status, string Description);
+    public sealed record IpamSubnet(string Id, string ViewId, string Prefix, string Name, string Site, int? Vlan, string DhcpScope, string DnsZone, bool Container = false, string Source = "");
+    public sealed record IpamAssignment(string Id, string SubnetId, string Address, string HostName, string Owner, string Status, string Description, string Source = "");
+    public sealed record IpamDiscoveredNetwork(string Prefix, string Name, string DhcpScope, string DnsZone, string Source);
+    public sealed record IpamDiscoveredAddress(string Address, string HostName, string Owner, string Status, string Source);
+    public sealed record IpamAddressRange(string Start, string End, string Kind);
     public sealed record IpamChange(long Revision, DateTime Timestamp, string Actor, string Operation, string ObjectId, string Before, string After);
     public sealed record IpamObservation(string Address, string Source, string ObjectName, string HostName, string ClientIdentifier, DateTime? Expires);
     public sealed record IpamFinding(string Address, string Kind, string Detail);
@@ -82,6 +85,57 @@ namespace DnsServerCore.Ipam
 
         public byte[] Export() { lock (_sync) return JsonSerializer.SerializeToUtf8Bytes(_state, JsonOptions); }
         public IpamSubnet[] GetSubnets() { lock (_sync) return _state.Subnets.ToArray(); }
+        // Discovery owns only records it creates. Operator intent and metadata take precedence.
+        // A complete source snapshot is required; collection failures must not remove inventory.
+        public bool SynchronizeDiscovery(IEnumerable<IpamDiscoveredNetwork> networks, IEnumerable<IpamDiscoveredAddress> addresses)
+        {
+            var discoveredNetworks = networks.ToArray();
+            var discoveredAddresses = addresses.ToArray();
+            lock (_sync)
+            {
+                List<IpamSubnet> subnets = _state.Subnets.ToList();
+                foreach (var item in discoveredNetworks.OrderBy(n => n.Source == "DhcpScope" ? 0 : 1))
+                {
+                    var network = new IpamNetwork(item.Prefix);
+                    var existing = subnets.FirstOrDefault(s => s.ViewId == "default" && s.Prefix == network.Prefix && !s.Container);
+                    if (existing is not null)
+                    {
+                        if (existing.Source == item.Source)
+                            subnets[subnets.IndexOf(existing)] = existing with { Name = item.Name, DhcpScope = item.DhcpScope, DnsZone = item.DnsZone };
+                        else if (string.IsNullOrEmpty(existing.DhcpScope) && !string.IsNullOrEmpty(item.DhcpScope))
+                            subnets[subnets.IndexOf(existing)] = existing with { DhcpScope = item.DhcpScope, DnsZone = string.IsNullOrEmpty(existing.DnsZone) ? item.DnsZone : existing.DnsZone };
+                        continue;
+                    }
+                    // Do not merge ambiguous overlaps or infer routing domains from DNS names.
+                    if (subnets.Any(s => s.ViewId == "default" && network.Overlaps(new IpamNetwork(s.Prefix)) && !(s.Container && new IpamNetwork(s.Prefix).PrefixLength < network.PrefixLength))) continue;
+                    if (!string.IsNullOrEmpty(item.DhcpScope) && subnets.Any(s => string.Equals(s.DhcpScope, item.DhcpScope, StringComparison.OrdinalIgnoreCase))) continue;
+                    subnets.Add(new IpamSubnet(Guid.NewGuid().ToString("N"), "default", network.Prefix, item.Name, "", null, item.DhcpScope, item.DnsZone, false, item.Source));
+                }
+                var assignments = _state.Assignments.Where(a => string.IsNullOrEmpty(a.Source)).ToList();
+                foreach (var group in discoveredAddresses.GroupBy(a => Address(a.Address).ToString()).OrderBy(g => g.Key, StringComparer.Ordinal))
+                {
+                    var ip = Address(group.Key);
+                    var subnet = subnets.FirstOrDefault(s => s.ViewId == "default" && !s.Container && new IpamNetwork(s.Prefix).Contains(ip));
+                    if (subnet is null || IpamNetwork.Number(ip) < new IpamNetwork(subnet.Prefix).FirstUsable || IpamNetwork.Number(ip) > new IpamNetwork(subnet.Prefix).LastUsable) continue;
+                    if (assignments.Any(a => a.Address == group.Key && subnets.Any(s => s.Id == a.SubnetId && s.ViewId == "default"))) continue;
+                    var reservation = group.Where(a => a.Source == "DhcpReservation").ToArray();
+                    // Conflicting reservations require review rather than choosing one owner.
+                    if (reservation.Select(a => a.Owner).Distinct().Count() > 1) continue;
+                    var selected = reservation.FirstOrDefault() ?? group.OrderBy(a => a.HostName, StringComparer.Ordinal).First();
+                    var old = _state.Assignments.FirstOrDefault(a => a.SubnetId == subnet.Id && a.Address == group.Key && !string.IsNullOrEmpty(a.Source));
+                    assignments.Add(new IpamAssignment(old?.Id ?? Guid.NewGuid().ToString("N"), subnet.Id, group.Key, selected.HostName ?? "", selected.Owner ?? "", selected.Status, "", selected.Source));
+                }
+                // Retain removed networks for history/operator metadata; stale discovered addresses are removed.
+                var next = _state with { Subnets = subnets.ToArray(), Assignments = assignments.OrderBy(a => a.Id, StringComparer.Ordinal).ToArray() };
+                if (_state.Subnets.SequenceEqual(next.Subnets) && _state.Assignments.OrderBy(a => a.Id, StringComparer.Ordinal).SequenceEqual(next.Assignments)) return false;
+                long revision = checked(_state.Revision + 1);
+                next = next with { Revision = revision, Changes = _state.Changes.Append(new IpamChange(revision, DateTime.UtcNow, "DDI discovery", "discovery.sync", "", JsonSerializer.Serialize(new { _state.Subnets, _state.Assignments }, JsonOptions), JsonSerializer.Serialize(new { next.Subnets, next.Assignments }, JsonOptions))).ToArray() };
+                Validate(next);
+                Save(next);
+                _state = next;
+                return true;
+            }
+        }
         public void Restore(byte[] data)
         {
             IpamSnapshot state = Parse(data);
@@ -227,7 +281,7 @@ namespace DnsServerCore.Ipam
             return state.Subnets.Any(s => s.Id != id && s.ViewId == subnet.ViewId && new IpamNetwork(s.Prefix).PrefixLength > network.PrefixLength && network.Overlaps(new IpamNetwork(s.Prefix)));
         }
 
-        public string NextAvailable(string subnetId, IEnumerable<string> observedAddresses)
+        public string NextAvailable(string subnetId, IEnumerable<string> observedAddresses, IEnumerable<IpamAddressRange> excludedRanges = null)
         {
             IpamSnapshot state = Snapshot();
             IpamSubnet subnet = state.Subnets.SingleOrDefault(s => s.Id == subnetId) ?? throw new ArgumentException("Unknown subnet.");
@@ -236,9 +290,16 @@ namespace DnsServerCore.Ipam
             HashSet<BigInteger> occupied = state.Assignments.Where(a => a.SubnetId == subnetId).Select(a => IpamNetwork.Number(Address(a.Address))).ToHashSet();
             foreach (string address in observedAddresses)
                 if (IPAddress.TryParse(address, out IPAddress ip) && network.Contains(ip)) occupied.Add(IpamNetwork.Number(ip));
+            var intervals = occupied.Select(n => (Start: n, End: n)).ToList();
+            foreach (var range in excludedRanges ?? [])
+            {
+                var start = Address(range.Start); var end = Address(range.End);
+                if (start.AddressFamily != end.AddressFamily || IpamNetwork.Number(start) > IpamNetwork.Number(end)) throw new ArgumentException("Invalid excluded address range.");
+                if (start.GetAddressBytes().Length * 8 == network.Bits) intervals.Add((IpamNetwork.Number(start), IpamNetwork.Number(end)));
+            }
             BigInteger candidate = network.FirstUsable;
-            foreach (BigInteger used in occupied.Order())
-            { if (used < candidate) continue; if (used > candidate) break; candidate++; }
+            foreach (var interval in intervals.OrderBy(i => i.Start))
+            { if (interval.End < candidate) continue; if (interval.Start > candidate) break; candidate = interval.End + 1; }
             if (candidate > network.LastUsable) throw new InvalidOperationException("No available address remains in this subnet.");
             return network.Format(candidate);
         }

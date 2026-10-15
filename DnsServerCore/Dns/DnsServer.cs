@@ -2107,6 +2107,7 @@ namespace DnsServerCore.Dns
                     await udpListener.SendToAsync(new ArraySegment<byte>(sendBuffer, 0, (int)sendBufferStream.Position), SocketFlags.None, returnEP);
                 }
 
+                SyslogForwarder?.RecordDnsQuery(remoteEP, protocol, request, response);
                 _queryLog?.Write(remoteEP, protocol, request, response);
                 _statsManager.QueueUpdate(request, remoteEP, protocol, response, false);
             }
@@ -2119,6 +2120,7 @@ namespace DnsServerCore.Dns
                 if ((_state == ServiceState.Stopping) || (_state == ServiceState.Stopped))
                     return; //server stopping
 
+                SyslogForwarder?.RecordDnsQuery(remoteEP, protocol, request, null);
                 _queryLog?.Write(remoteEP, protocol, request, null);
                 _log.Write(remoteEP, protocol, ex);
             }
@@ -2356,6 +2358,7 @@ namespace DnsServerCore.Dns
                     }
                 }, _tcpSendTimeout);
 
+                SyslogForwarder?.RecordDnsQuery(remoteEP, protocol, request, response);
                 _queryLog?.Write(remoteEP, protocol, request, response);
                 _statsManager.QueueUpdate(request, remoteEP, protocol, response, false);
             }
@@ -2370,7 +2373,10 @@ namespace DnsServerCore.Dns
             catch (Exception ex)
             {
                 if (request is not null)
+                {
+                    SyslogForwarder?.RecordDnsQuery(remoteEP, protocol, request, null);
                     _queryLog?.Write(remoteEP, protocol, request, null);
+                }
 
                 _log.Write(remoteEP, protocol, ex);
             }
@@ -2510,6 +2516,7 @@ namespace DnsServerCore.Dns
                 //send response
                 await response.WriteToTcpAsync(quicStream, sharedBuffer);
 
+                SyslogForwarder?.RecordDnsQuery(remoteEP, DnsTransportProtocol.Quic, request, response);
                 _queryLog?.Write(remoteEP, DnsTransportProtocol.Quic, request, response);
                 _statsManager.QueueUpdate(request, remoteEP, DnsTransportProtocol.Quic, response, false);
             }
@@ -2524,7 +2531,10 @@ namespace DnsServerCore.Dns
             catch (Exception ex)
             {
                 if (request is not null)
+                {
+                    SyslogForwarder?.RecordDnsQuery(remoteEP, DnsTransportProtocol.Quic, request, null);
                     _queryLog?.Write(remoteEP, DnsTransportProtocol.Quic, request, null);
+                }
 
                 _log.Write(remoteEP, DnsTransportProtocol.Quic, ex);
             }
@@ -2732,6 +2742,7 @@ namespace DnsServerCore.Dns
                     }
                 }
 
+                SyslogForwarder?.RecordDnsQuery(remoteEP, DnsTransportProtocol.Https, dnsRequest, dnsResponse);
                 _queryLog?.Write(remoteEP, DnsTransportProtocol.Https, dnsRequest, dnsResponse);
                 _statsManager.QueueUpdate(dnsRequest, remoteEP, DnsTransportProtocol.Https, dnsResponse, false);
             }
@@ -2742,7 +2753,10 @@ namespace DnsServerCore.Dns
             catch (Exception ex)
             {
                 if (dnsRequest is not null)
+                {
+                    SyslogForwarder?.RecordDnsQuery(remoteEP, DnsTransportProtocol.Https, dnsRequest, null);
                     _queryLog?.Write(remoteEP, DnsTransportProtocol.Https, dnsRequest, null);
+                }
 
                 _log.Write(remoteEP, DnsTransportProtocol.Https, ex);
             }
@@ -2861,6 +2875,12 @@ namespace DnsServerCore.Dns
                 {
                     _log.Write(remoteEP, protocol, ex);
                 }
+            }
+
+            if (SecurityManager is not null)
+            {
+                try { response = SecurityManager.InspectResponse(request, remoteEP, response); }
+                catch (Exception ex) { _log.Write(remoteEP, protocol, ex); }
             }
 
             if (request.EDNS is null)
@@ -4781,6 +4801,11 @@ namespace DnsServerCore.Dns
 
         private async Task<DnsDatagram> ProcessRecursiveQueryAsync(DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol, IReadOnlyList<DnsResourceRecord> conditionalForwarders, bool dnssecValidation, bool skipDnsAppAuthoritativeRequestHandlers, int clientTimeout)
         {
+            if (SecurityManager is not null)
+            {
+                DnsDatagram securityResponse = SecurityManager.CheckQuery(request, remoteEP);
+                if (securityResponse is not null) return securityResponse;
+            }
             bool isAllowed = await IsAllowedAsync(request, remoteEP, protocol);
             if (!isAllowed)
             {
@@ -6958,6 +6983,9 @@ namespace DnsServerCore.Dns
 
         public string ConfigFolder
         { get { return _configFolder; } }
+
+        public Security.DdiSecurityManager SecurityManager { get; set; }
+        public Logging.SyslogForwarder SyslogForwarder { get; set; }
 
         public IReadOnlyList<IPEndPoint> LocalEndPoints
         {

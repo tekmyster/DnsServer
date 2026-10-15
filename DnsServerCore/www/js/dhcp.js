@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -71,7 +71,7 @@ function refreshDhcpLeases() {
             if (dhcpLeases.length > 0)
                 $("#tableDhcpLeasesFooter").html("<tr><td colspan=\"8\"><b>Total Leases: " + dhcpLeases.length + "</b></td></tr>");
             else
-                $("#tableDhcpLeasesFooter").html("<tr><td colspan=\"8\" align=\"center\">No Lease Found</td></tr>");
+                $("#tableDhcpLeasesFooter").html("<tr><td colspan=\"8\" align=\"center\">No active leases.</td></tr>");
 
             divDhcpLeasesLoader.hide();
             divDhcpLeases.show();
@@ -190,7 +190,7 @@ function removeLease(objBtn, index, scopeName, clientIdentifier) {
             if (dhcpLeasesLength > 0)
                 $("#tableDhcpLeasesFooter").html("<tr><td colspan=\"8\"><b>Total Leases: " + dhcpLeasesLength + "</b></td></tr>");
             else
-                $("#tableDhcpLeasesFooter").html("<tr><td colspan=\"8\" align=\"center\">No Lease Found</td></tr>");
+                $("#tableDhcpLeasesFooter").html("<tr><td colspan=\"8\" align=\"center\">No active leases.</td></tr>");
 
             showAlert("success", "Lease Removed!", "The DHCP lease was removed successfully.");
         },
@@ -247,7 +247,7 @@ function refreshDhcpScopes(checkDisplay) {
             if (dhcpScopes.length > 0)
                 $("#tableDhcpScopesFooter").html("<tr><td colspan=\"5\"><b>Total Scopes: " + dhcpScopes.length + "</b></td></tr>");
             else
-                $("#tableDhcpScopesFooter").html("<tr><td colspan=\"5\" align=\"center\">No Scope Found</td></tr>");
+                $("#tableDhcpScopesFooter").html("<tr><td colspan=\"5\" align=\"center\">No scopes configured.</td></tr>");
 
             divDhcpViewScopesLoader.hide();
             divDhcpViewScopes.show();
@@ -671,7 +671,7 @@ function deleteDhcpScope(index, scopeName) {
             if (dhcpLeasesLength > 0)
                 $("#tableDhcpScopesFooter").html("<tr><td colspan=\"5\"><b>Total Scopes: " + dhcpLeasesLength + "</b></td></tr>");
             else
-                $("#tableDhcpScopesFooter").html("<tr><td colspan=\"5\" align=\"center\">No Scope Found</td></tr>");
+                $("#tableDhcpScopesFooter").html("<tr><td colspan=\"5\" align=\"center\">No scopes configured.</td></tr>");
 
             divDhcpViewScopes.show();
             divDhcpViewScopesLoader.hide();

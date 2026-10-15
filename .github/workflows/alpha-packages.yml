@@ -1,0 +1,182 @@
+name: Alpha install packages
+on:
+  push:
+    branches: [ddi-foundation]
+    paths:
+      - '.github/workflows/alpha-packages.yml'
+      - 'packaging/**'
+      - 'scripts/package-teqtanium.ps1'
+      - 'Tectanium.WindowsService/**'
+      - 'DnsServerApp/**'
+      - 'DnsServerCore/**'
+      - 'tests/Ipam.Tests/PackageChecks.cs'
+      - 'tests/Ipam.Tests/**'
+      - 'scripts/test-ddi.ps1'
+      - 'Directory.Build.targets'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: alpha-packages-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  RELEASE_VERSION: 0.1.0-alpha.4
+jobs:
+  private-validation:
+    if: github.event.repository.private
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: app
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: app
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: TechnitiumSoftware/TechnitiumLibrary
+          ref: 6715bf04c0a39938792cfee4d2654c5f368a1034
+          path: TechnitiumLibrary
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate private build without publishing artifacts
+        run: |
+          ./scripts/build-ddi.ps1
+          ./scripts/test-ddi.ps1
+  package:
+    if: '!github.event.repository.private'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: portable
+            os: ubuntu-24.04
+          - runtime: linux-x64
+            os: ubuntu-24.04
+          - runtime: linux-arm64
+            os: ubuntu-24.04-arm
+          - runtime: win-x64
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: app
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: TechnitiumSoftware/TechnitiumLibrary
+          ref: 6715bf04c0a39938792cfee4d2654c5f368a1034
+          path: TechnitiumLibrary
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build pinned dependencies and tests
+        run: |
+          ./scripts/check-public-license.ps1
+          ./scripts/build-ddi.ps1
+          dotnet build tests/Ipam.Tests/Ipam.Tests.csproj -c Release --nologo -v quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
+      - name: Package binaries
+        env:
+          PACKAGE_RUNTIME: ${{ matrix.runtime }}
+        run: ./scripts/package-teqtanium.ps1 -Version $env:RELEASE_VERSION -Runtime $env:PACKAGE_RUNTIME
+      - name: Test packaged application
+        env:
+          PACKAGE_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          $filename = if ($env:PACKAGE_RUNTIME -eq 'portable') { 'DnsServerApp.dll' } elseif ($IsWindows) { 'DnsServerApp.exe' } else { 'DnsServerApp' }
+          $binary = (Resolve-Path "artifacts/packages/$env:RELEASE_VERSION/$env:PACKAGE_RUNTIME/$filename").Path
+          dotnet run --project tests/Ipam.Tests/Ipam.Tests.csproj -c Release --no-build -- --package $binary
+          if ($LASTEXITCODE -ne 0) { throw 'Native package smoke test failed.' }
+      - name: Full DDI regressions
+        if: matrix.runtime == 'portable'
+        run: ./scripts/test-ddi.ps1 -SkipBuild
+      - name: Compile and test Windows setup
+        if: matrix.runtime == 'win-x64'
+        run: |
+          $compilerFolder=Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $installer=Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe -OutFile $installer
+          $signature=Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys') { throw 'Inno Setup publisher verification failed.' }
+          $tool=Start-Process $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$compilerFolder`"") -WindowStyle Hidden -Wait -PassThru
+          if ($tool.ExitCode -ne 0) { throw 'Compiler installation failed.' }
+          $output=(Resolve-Path "artifacts/packages/$env:RELEASE_VERSION").Path
+          $payload=Join-Path $output 'win-x64'
+          & (Join-Path $compilerFolder 'ISCC.exe') "/DPackageDir=$payload" "/DReleaseVersion=$env:RELEASE_VERSION" "/DOutputPath=$output" packaging/TectaniumSetup.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Setup compilation failed.' }
+          $setup=Join-Path $output "teQtanium-$env:RELEASE_VERSION-windows-x64-setup.exe"
+          dotnet run --project tests/Ipam.Tests/Ipam.Tests.csproj -c Release --no-build -- --prepare-package "$env:ProgramData/teQtanium DDI Server" 15353
+          if ($LASTEXITCODE -ne 0) { throw 'Windows fixture preparation failed.' }
+          $dnsBefore=Get-DnsClientServerAddress | Select-Object InterfaceIndex,AddressFamily,ServerAddresses | ConvertTo-Json -Depth 6
+          $firewallBefore=@(Get-NetFirewallRule).Count
+          $installed=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DnsPort=15353','/ConsolePort=15380',"/LOG=`"$env:RUNNER_TEMP/teqtanium-setup.log`"") -WindowStyle Hidden -Wait -PassThru
+          if ($installed.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP/teqtanium-setup.log" -Tail 50; throw 'Setup installation failed.' }
+          python packaging/check-service.py http://127.0.0.1:15380/ "$env:ProgramData/teQtanium DDI Server/initial-admin-password.txt" --dns-port 15353
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/teqtanium-setup.log" -Tail 80; throw 'Installed Windows service failed.' }
+          if ((Get-DnsClientServerAddress | Select-Object InterfaceIndex,AddressFamily,ServerAddresses | ConvertTo-Json -Depth 6) -ne $dnsBefore -or @(Get-NetFirewallRule).Count -ne $firewallBefore) { throw 'Installer changed host DNS or firewall rules.' }
+          $removed=Start-Process "$env:ProgramFiles/teQtanium DDI Server/unins000.exe" -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -WindowStyle Hidden -Wait -PassThru
+          if ($removed.ExitCode -ne 0 -or (Get-Service TectaniumDDI -ErrorAction SilentlyContinue)) { throw 'Service uninstall failed.' }
+          if (-not (Test-Path "$env:ProgramData/teQtanium DDI Server/auth.config")) { throw 'Uninstall removed configuration.' }
+          Compress-Archive -LiteralPath $setup -DestinationPath (Join-Path $output "teQtanium-$env:RELEASE_VERSION-windows-x64-setup.zip")
+      - name: Test Linux installer
+        if: matrix.runtime == 'linux-x64' || matrix.runtime == 'linux-arm64'
+        env:
+          PACKAGE_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          $output=(Resolve-Path "artifacts/packages/$env:RELEASE_VERSION").Path
+          $archive=Join-Path $output "teQtanium-$env:RELEASE_VERSION-$env:PACKAGE_RUNTIME.tar.gz"
+          $hash=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content (Join-Path $output 'installer-test.sha256') -Encoding ascii
+          dotnet run --project tests/Ipam.Tests/Ipam.Tests.csproj -c Release --no-build -- --prepare-package "$env:RUNNER_TEMP/package-config" 15353
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture preparation failed.' }
+          sudo mkdir -p /etc/teqtanium-ddi
+          sudo cp "$env:RUNNER_TEMP/package-config/dns.config" /etc/teqtanium-ddi/dns.config
+          $before=Get-FileHash /etc/resolv.conf -Algorithm SHA256
+          sudo env TECTANIUM_CONSOLE_PORT=15380 TECTANIUM_TEST_DNS_PORT=15353 bash packaging/install.sh --version $env:RELEASE_VERSION --archive $archive --checksums (Join-Path $output 'installer-test.sha256')
+          if ($LASTEXITCODE -ne 0) { sudo journalctl -u tectanium-ddi.service --no-pager -n 50; throw 'Linux installation failed.' }
+          if ((Get-FileHash /etc/resolv.conf -Algorithm SHA256).Hash -ne $before.Hash) { throw 'Installer changed host resolver configuration.' }
+          sudo systemctl stop tectanium-ddi.service
+      - name: Collect downloads
+        run: |
+          New-Item -ItemType Directory artifacts/dist -Force | Out-Null
+          Get-ChildItem "artifacts/packages/$env:RELEASE_VERSION" -File | Where-Object { $_.Name -notlike 'installer-test*' } | Copy-Item -Destination artifacts/dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packages-${{ matrix.runtime }}
+          path: app/artifacts/dist/*
+          retention-days: 7
+  docker:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: packages-portable
+          path: artifacts
+      - name: Build and test container
+        run: |
+          mkdir -p artifacts/payload artifacts/dist
+          tar -xzf "artifacts/teQtanium-$RELEASE_VERSION-portable.tar.gz" -C artifacts/payload
+          docker build -f packaging/Dockerfile -t "teqtanium-ddi:$RELEASE_VERSION" artifacts/payload
+          credential=$(openssl rand -hex 32)
+          echo "::add-mask::$credential"
+          printf '%s' "$credential" > artifacts/credential.txt
+          docker run -d --name teqtanium-test -e "DNS_SERVER_ADMIN_PASSWORD=$credential" -p 127.0.0.1:15380:5380 -p 127.0.0.1:15353:53/tcp -p 127.0.0.1:15353:53/udp "teqtanium-ddi:$RELEASE_VERSION"
+          for i in $(seq 1 60); do if curl -fsS http://127.0.0.1:15380/ >/dev/null; then break; fi; sleep 1; done
+          python packaging/check-service.py http://127.0.0.1:15380/ artifacts/credential.txt --dns-port 15353
+          docker stop teqtanium-test
+          docker save "teqtanium-ddi:$RELEASE_VERSION" | gzip > "artifacts/dist/teQtanium-$RELEASE_VERSION-docker-linux-x64.tar.gz"
+          cp packaging/compose.yaml artifacts/dist/compose.yaml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packages-docker
+          path: artifacts/dist/*
+          retention-days: 7

@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -893,7 +893,7 @@ function refreshZones(checkDisplay, pageNumber) {
             }
 
             if (responseJSON.response.zones.length == 0)
-                tableHtmlRows = "<tr><td colspan=\"9\" align=\"center\">No Zone Found</td></tr>";
+                tableHtmlRows = "<tr><td colspan=\"9\" align=\"center\">No matching zones.</td></tr>";
 
             var paginationHtml = "";
 

@@ -1,14 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 		<Authors>Shreyas Zare</Authors>
-		<Company>Technitium</Company>
-		<Product>Technitium DNS Server</Product>
+		<Company>teQtanium contributors</Company>
+		<Product>teQtanium DDI Server</Product>
 		<PackageProjectUrl>https://technitium.com/dns/</PackageProjectUrl>
-		<RepositoryUrl>https://github.com/TechnitiumSoftware/DnsServer</RepositoryUrl>
+		<RepositoryUrl>https://github.com/tekmyster/teQtanium-DDI-Server</RepositoryUrl>
 		<RepositoryType></RepositoryType>
 		<Description></Description>
 		<PackageId>DnsServer</PackageId>
@@ -21,6 +21,9 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<Content Include="Security\public_suffix_list.dat">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
 
@@ -102,6 +105,7 @@
 		<None Remove="www\js\Chart.min.js" />
 		<None Remove="www\js\cluster.js" />
 		<None Remove="www\js\common.js" />
+		<None Remove="www\js\product-ux.js" />
 		<None Remove="www\js\dhcp.js" />
 		<None Remove="www\js\dnsclient.js" />
 		<None Remove="www\js\jquery.min.js" />
@@ -153,7 +157,16 @@
 		<Content Include="www\css\amber-mode.css">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
-		<Content Include="www\css\dark-mode.css">
+		<Content Include="www\css\teqtanium.css">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="www\img\teqtanium.svg">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="dohwww\img\teqtanium.svg">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="www\css\dark-mode.css">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="www\favicon.ico">
@@ -271,6 +284,16 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="www\js\zone.js">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="www\js\security.js">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="www\js\ddi.js"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+		<Content Include="www\js\migration.js"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+		<Content Include="www\js\syslog.js"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+		<Content Include="www\js\product-ux.js"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+		<Content Include="www\js\ipam.js">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="www\js\dhcp.js">

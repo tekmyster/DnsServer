@@ -1,48 +1,14 @@
-# syntax=docker.io/docker/dockerfile:1
-
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
-
-# Add the MS repo to install `libmsquic` to support DNS-over-QUIC:
-ADD --link https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb /
-RUN <<HEREDOC
-  dpkg -i packages-microsoft-prod.deb && rm packages-microsoft-prod.deb
-  # `dnsutils` added to include the `dig` command for troubleshooting:
-  apt-get update && apt-get install -y libmsquic dnsutils iputils-ping curl
-  apt-get clean -y && rm -rf /var/lib/apt/lists/*
-
-  # `/etc/dns` is expected to exist the default directory for persisting state:
-  # (Users should volume mount to this location or modify the `CMD` of their container)
-  mkdir /etc/dns
-HEREDOC
-
-# Project is built outside of Docker, copy over the build directory:
-WORKDIR /opt/technitium/dns
-COPY --link ./DnsServerApp/bin/Release/publish /opt/technitium/dns
-
-ENTRYPOINT ["/usr/bin/dotnet", "/opt/technitium/dns/DnsServerApp.dll"]
+WORKDIR /opt/teqtanium-ddi
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+COPY . .
+ENV DNS_SERVER_WEB_SERVICE_LOCAL_ADDRESSES=0.0.0.0
+ENV DNS_SERVER_LOG_FOLDER_PATH=/etc/dns/logs
+ENTRYPOINT ["dotnet", "DnsServerApp.dll"]
 CMD ["/etc/dns"]
-
-
-## Only append image metadata below this line:
-EXPOSE \
-  # Standard DNS service
-  53/udp 53/tcp      \
-  # DNS-over-QUIC (UDP) + DNS-over-TLS (TCP)
-  853/udp 853/tcp    \
-  # DNS-over-HTTPS (UDP => HTTP/3) (TCP => HTTP/1.1 + HTTP/2)
-  443/udp 443/tcp    \
-  # DNS-over-HTTP (for when running behind a reverse-proxy that terminates TLS)
-  80/tcp 8053/tcp    \
-  # Technitium web console + API (HTTP / HTTPS)
-  5380/tcp 53443/tcp \
-  # DHCP
-  67/udp
-
-# https://specs.opencontainers.org/image-spec/annotations/
-# https://github.com/opencontainers/image-spec/blob/main/annotations.md
-LABEL org.opencontainers.image.title="Technitium DNS Server"
-LABEL org.opencontainers.image.version=15.6.1
-LABEL org.opencontainers.image.vendor="Technitium"
-LABEL org.opencontainers.image.source="https://github.com/TechnitiumSoftware/DnsServer"
-LABEL org.opencontainers.image.url="https://technitium.com/dns/"
-LABEL org.opencontainers.image.authors="support@technitium.com"
+VOLUME ["/etc/dns"]
+EXPOSE 53/tcp 53/udp 5380/tcp 67/udp 853/tcp 853/udp 443/tcp 443/udp
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s CMD curl --fail http://127.0.0.1:5380/api/dnsClient/healthCheck || exit 1
+LABEL org.opencontainers.image.title="teQtanium DDI Server"
+LABEL org.opencontainers.image.source="https://github.com/tekmyster/teQtanium-DDI-Server"
+LABEL org.opencontainers.image.licenses="GPL-3.0-only"

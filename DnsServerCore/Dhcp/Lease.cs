@@ -112,6 +112,13 @@ namespace DnsServerCore.Dhcp
 
         #region internal
 
+        internal static Lease Recover(AllocationEntry entry, bool reserved)
+        {
+            var lease = new Lease(reserved ? LeaseType.Reserved : LeaseType.Dynamic, ClientIdentifierOption.Parse(entry.Client), entry.Host, ParseHardwareAddress(entry.Hardware), AllocationSequence.Address(entry.Address), null, 0);
+            lease._leaseExpires = entry.Expires;
+            return lease;
+        }
+
         internal static byte[] ParseHardwareAddress(string hardwareAddress)
         {
             string[] parts = hardwareAddress.Split(_hyphenColonSeparator);
@@ -122,6 +129,9 @@ namespace DnsServerCore.Dhcp
 
             return address;
         }
+
+        internal void PreserveExpiry(DateTime expires)
+        { if (expires > _leaseExpires) _leaseExpires = expires; }
 
         internal void ConvertToReserved()
         {

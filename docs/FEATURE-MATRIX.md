@@ -1,0 +1,34 @@
+# DDI delivery status
+
+This is a developing open-source DDI fork. Features have no paid software tier, but a working feature is not a claim of production parity or superior detection accuracy versus Infoblox, EfficientIP or BlueCat. The table separates current functionality from the remaining product requirements.
+
+**Local failover retest passed:** Linux acknowledged-lease durability was corrected, and the opt-in Hyper-V controller passed automatic fenced ownership takeover and native cluster promotion after service failure and VM power loss. See [test results](AUTOMATIC-FAILOVER-TEST.md). This does not establish production readiness.
+
+| Requested capability | Current behavior | Remaining requirements |
+| --- | --- | --- |
+| teQtanium baseline | Upstream engines retained; repeatable Release build; fork and draft PR | Immutable Linux packaging with manifests implemented; upgrades, compatibility and production qualification remain |
+| Syslog forwarding | Native UDP/TCP, RFC 5424, both TCP framing modes, system/DHCP and security events, opt-in DNS queries, per-node settings and bounded queue; real collector and permission/backup tests | Native TLS, durable replay, collector acknowledgements and deployment-specific throughput qualification |
+| Multi-server DHCP allocation | Balanced disjoint scattered sequences, stable identities, exclusions, initial reservations, directory-synchronized Linux offer/ACK journals; three abrupt ACK power-cut tests passed | Broader crash-point/platform qualification; live membership/range/reservation migration and controller consensus |
+| More than two synchronized servers | All enrolled peers exchange sequenced snapshots over HTTPS; revisioned scope options reconcile from the primary; reachable peers continue during coordinator outage; three live local servers validated | Regional deployment, enrollment/DANE and scale qualification |
+| Disconnected service | Owners use their unchanged sequences and previously granted capacity | Broader fencing providers, clock-bound qualification and unrecoverable donor recovery |
+| Overflow after own sequence | Donor checks authoritative state and persists a permanent exclusive grant before borrower offers | Grant return/reclamation and bounded idempotent retry across unknown HTTP outcomes |
+| Local primary/secondary and regional recovery | Ordered HA pairs control response preference; connected owners can atomically surrender selected addresses with preserved leases, offers and quarantine; retries distinguish surrender from receiver persistence | Hyper-V fenced whole-owner takeover and automatic promotion implemented; automatic rejoin/failback, grant return, redundant controllers and other providers remain |
+| Shared DNS/DHCP security awareness | IoCs and behavioral/decline observations create shared expiring device evidence; IPAM exposes findings | Historical-event backfill, per-node signed evidence and finer security roles |
+| True IPAM | IPv4/IPv6 views, containers, assignments, metadata, utilization and reconciliation | Atomic service provisioning, discovery, subnet/prefix allocation, workflow, scoped governance and enterprise database |
+| NetBox relationship | DDI-owned prefix/address publication, explicit VRF mapping, previews, before/after review, provenance, ETag guards and unknown-outcome reconciliation | Reverse import, object/site authority, DCIM, VLAN/site/tenant/interface mappings, scheduler and deletion reconciliation |
+| Threat intelligence | Local exact/suffix/network rules and asynchronous bounded MISP cache; URL-path evidence retained | General feed schedulers, RPZ interoperability, sharing policy and richer source quality controls |
+| Behavioral risk | Explainable rolling five-minute/hour tunneling and DGA-pattern suspicion, low-priority periodicity, bounded coverage | Representative datasets, learned baselines, trained classifiers and production calibration |
+| Optional model assistance | Local or authorized HTTPS Chat Completions-compatible event explanations; selected evidence, no policy tools | Live model/GPU qualification, multi-event investigations and evaluated answers |
+| Security operations | Persisted bounded timeline search, analyst dispositions, JSON export and policy rollback | SIEM streaming, external immutable audit, long retention, richer investigations and response integrations |
+| DNS capabilities | Existing authoritative/recursive DNS, DNSSEC and encrypted transports retained | New-policy transport/performance matrix, sinkholes and SVCB/HTTPS hints |
+| IPv6 DDI | IPv6 IPAM, DNS and indicator matching | DHCPv6 service and synchronized allocation |
+| Backup and migration | Selective native backups and a portable package with checksum preview, disabled scopes, retained destination identity, recovery backup and tested rollback | Scheduled/encrypted backups, online cluster replacement and abrupt mid-import crash recovery |
+| Product UX | Project-wide contract, responsive console/dialogs, accessible controls and feedback, theme contrast, structured DNS/security evidence and progressive disclosure; all primary sections audited at desktop and narrow widths | Continued quality gates for new workflows and deployment-specific/third-party application screens |
+
+Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-ddi.ps1` after building the pinned sibling library dependencies. The test suite covers real DHCP offer/ACK hooks, three-owner partitions, three native HTTPS servers, API permission boundaries, fresh administrative sessions, MISP/NetBox mocks and UI read workflows. It does not establish enterprise throughput, geographically distributed failover, or production threat-detection accuracy. Administrative credentials and access controls on production servers have not been changed. Automated fresh-session checks exercised loopback; VM checks also verified host source 172.30.71.1. Other authorized source paths remain untested.
+
+Automatic ownership takeover requires verified fencing and the donorâ€™s durable authoritative journal. The Hyper-V controller can boot an offline donor under a persistent fence, recover and surrender its authority, and promote the survivor. It never infers reusable capacity from a stale peer replica or automatically unfences the old owner.
+
+The [two-VM Hyper-V lab](HYPERV-LAB.md) verified native DNS/DHCP synchronization, shared security and IPAM, plus the corrected [automatic failover tests](AUTOMATIC-FAILOVER-TEST.md). VM 02 is now Primary; VM 01 is fenced and its DDI service is stopped. Follow [the runbook](HYPERV-FAILOVER.md) for controller boundaries and recovery limitations. No production service was modified.
+
+Use [Backup Settings or New Deployment](BACKUP-MIGRATION.md) in Settings > General. Migration preserves credentials and management addresses and does not confer distributed DHCP authority.

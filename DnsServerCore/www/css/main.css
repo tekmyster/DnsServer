@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -31,13 +31,49 @@ body {
     line-height: 1.42857143 !important;
 }
 
+.ddi-shared-dhcp summary {
+    cursor: pointer;
+}
+
+summary { cursor: pointer; }
+.tab-pane > details { margin: 15px 0; }
+.tab-pane form .row { margin-bottom: 12px; }
+.ux-details { display: grid; grid-template-columns: minmax(100px, 180px) minmax(0, 1fr); gap: 6px 16px; }
+.ux-details dd { overflow-wrap: anywhere; }
+.table-responsive { max-width: 100%; }
+.ux-table { overflow-x: auto; }
+.nav-tabs > li > a { padding: 10px 12px; }
+button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid #286090; outline-offset: 3px;
+}
+.dark-mode :focus-visible, .amber-mode :focus-visible { outline-color: #9dc5ff; }
+.alert details { margin-top: 8px; }
+.alert pre { white-space: pre-wrap; max-height: 240px; overflow: auto; }
+.ux-summary-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 250px; }
+.btn-success, .label-success { background-color: #287a28; border-color: #236b23; }
+.btn-warning, .label-warning { background-color: #8a5500; border-color: #794b00; }
+.btn-danger, .label-danger { background-color: #a73737; border-color: #922f2f; }
+.btn-info, .label-info { background-color: #216a80; border-color: #1c5d70; }
+.btn-success:hover, .btn-success:focus { background-color: #236b23; }
+.btn-warning:hover, .btn-warning:focus { background-color: #794b00; }
+.btn-danger:hover, .btn-danger:focus { background-color: #922f2f; }
+.btn-info:hover, .btn-info:focus { background-color: #1c5d70; }
+
+
+
+.ddi-shared-dhcp form {
+    margin-top: 10px;
+}
+
+
+
 @media (prefers-color-scheme: light) {
     body {
         background-color: #fafafa;
     }
 
     #header {
-        background-color: #6699ff;
+        background-color: #245eaa;
         box-shadow: 0px 1px 15px 0px #888888;
     }
 
@@ -52,7 +88,7 @@ body.light-mode {
 }
 
 .light-mode #header {
-    background-color: #6699ff;
+    background-color: #245eaa;
     box-shadow: 0px 1px 15px 0px #888888;
 }
 
@@ -62,15 +98,15 @@ body.light-mode {
 }
 
 a {
-    color: #6699ff;
+    color: #245eaa;
 }
 
     a:hover {
-        color: #6699ff;
+        color: #245eaa;
     }
 
     a:visited {
-        color: #6699ff;
+        color: #245eaa;
     }
 
 th a {
@@ -86,7 +122,7 @@ th a {
     height: 32px;
     margin-bottom: -32px;
     width: 100%;
-    min-width: 970px;
+    min-width: 0;
 }
 
     #header .title {
@@ -126,13 +162,13 @@ th a {
     margin-right: auto;
     padding: 55px 15px 60px 15px;
     word-wrap: break-word;
-    min-width: 970px;
+    min-width: 0;
 }
 
     .container .pageLogin {
         display: none;
         margin: auto;
-        width: 500px;
+        width: 500px; max-width: 100%;
         padding: 150px 0 0 0;
     }
 
@@ -167,7 +203,7 @@ th a {
     clear: both;
     position: relative;
     height: 55px;
-    min-width: 970px;
+    min-width: 0;
 }
 
     #footer .content {
@@ -180,12 +216,12 @@ th a {
     }
 
         #footer .content a {
-            color: #6699ff;
+            color: #245eaa;
             text-decoration: none;
         }
 
             #footer .content a:hover {
-                color: #6699ff;
+                color: #245eaa;
             }
 
 @media (min-width: 992px) {
@@ -213,7 +249,7 @@ th a {
 
 .AlertPlaceholder {
     position: fixed;
-    width: 800px;
+    width: 800px; max-width: calc(100vw - 30px);
     margin: auto;
     left: 0;
     right: 0;
@@ -269,57 +305,57 @@ th a {
 }
 
     .stats-panel .total-queries {
-        background-color: rgba(102, 153, 255, 0.7);
+        background-color: #286090;
         color: #ffffff;
     }
 
     .stats-panel .no-error {
-        background-color: rgba(92, 184, 92, 0.7);
+        background-color: #287a28;
         color: #ffffff;
     }
 
     .stats-panel .server-failure {
-        background-color: rgba(217, 83, 79, 0.7);
+        background-color: #a73737;
         color: #ffffff;
     }
 
     .stats-panel .nxdomain {
-        background-color: rgba(120, 120, 120, 0.7);
+        background-color: #595959;
         color: #ffffff;
     }
 
     .stats-panel .refused {
-        background-color: rgba(91, 192, 222, 0.7);
+        background-color: #216a80;
         color: #ffffff;
     }
 
     .stats-panel .auth-hit {
-        background-color: rgba(150, 150, 0, 0.7);
+        background-color: #706600;
         color: #ffffff;
     }
 
     .stats-panel .cache-hit {
-        background-color: rgba(111, 84, 153, 0.7);
+        background-color: #67459b;
         color: #ffffff;
     }
 
     .stats-panel .blocked {
-        background-color: rgba(255, 165, 0, 0.7);
+        background-color: #8a5500;
         color: #ffffff;
     }
 
     .stats-panel .dropped {
-        background-color: rgba(30, 30, 30, 0.7);
+        background-color: #333333;
         color: #ffffff;
     }
 
     .stats-panel .recursions {
-        background-color: rgba(23, 162, 184, 0.7);
+        background-color: #176773;
         color: #ffffff;
     }
 
     .stats-panel .clients {
-        background-color: rgba(51, 122, 183, 0.7);
+        background-color: #286090;
         color: #ffffff;
     }
 
@@ -362,7 +398,7 @@ th a {
         float: left;
         padding: 6px 4px;
         margin-right: 0.65%;
-        background-color: rgba(51, 122, 183, 0.7);
+        background-color: #286090;
         color: #ffffff;
     }
 
@@ -391,4 +427,28 @@ th a {
     padding: 2px 8px;
     height: 28px;
     max-width: 250px;
+}
+
+@media (max-width: 767px) {
+    #header .menu { padding-right: 10px; }
+    .container { padding: 45px 15px 30px; }
+    .container .pageLogin { padding-top: 45px; }
+    .panel-body { padding: 12px; }
+    .nav-tabs > li > a { padding: 8px 10px; }
+    .form-inline label { display: block; margin: 8px 0; }
+    .form-inline .form-control { width: 100%; max-width: 100%; }
+    .form-inline .form-group { margin-right: 0; }
+    .zone-list-pane, .zone-viewer-pane, .log-list-pane, .log-viewer-pane { float: none; width: 100%; }
+    .zones, .logs { max-height: 180px; overflow-y: auto; }
+    .modal-dialog { margin: 10px; width: calc(100% - 20px) !important; max-width: calc(100vw - 20px); }
+    .modal input, .modal select, .modal textarea { min-width: 0 !important; }
+    .modal .input-group, .modal .form-control { max-width: 100%; }
+    .ux-details { grid-template-columns: 1fr; gap: 2px; }
+    .ux-details dd { margin-bottom: 8px; }
+    #footer { height: auto; min-height: 55px; margin-top: 0; }
+    .ddi-shared-dhcp { max-width: none; }
+    .stats-panel { height: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+    .stats-panel .stats-item { width: auto; float: none; margin: 0; padding: 8px; }
+    .zone-stats-panel { height: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+    .zone-stats-panel .stats-item { width: auto; float: none; margin: 0; }
 }

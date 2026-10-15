@@ -1,6 +1,6 @@
-# Technitium DNS Server Docker Environment Variables
+# teQtanium DDI Server Docker Environment Variables
 
-Technitium DNS Server supports environment variables to allow initializing the config when the DNS server starts for the first time. These environment variables are useful for creating docker container and can be used as shown in the [docker-compose.yml](https://github.com/TechnitiumSoftware/DnsServer/blob/master/docker-compose.yml) file.
+teQtanium DDI Server supports environment variables to allow initializing the config when the DNS server starts for the first time. These environment variables are useful for creating docker container and can be used as shown in the [docker-compose.yml](https://github.com/tekmyster/teQtanium-DDI-Server/blob/master/docker-compose.yml) file.
 
 NOTE! These environment variables are read by the DNS server only when the DNS config file does not exists i.e. when the DNS server starts for the first time.
 

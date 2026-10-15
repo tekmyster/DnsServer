@@ -80,6 +80,7 @@ namespace DnsServerCore
         readonly string _configFolder;
 
         readonly LogManager _log;
+        readonly Logging.SyslogForwarder _syslog;
         readonly AuthManager _authManager;
 
         readonly WebServiceApi _api;
@@ -89,6 +90,13 @@ namespace DnsServerCore
         readonly WebServiceAppsApi _appsApi;
         readonly WebServiceSettingsApi _settingsApi;
         readonly WebServiceDhcpApi _dhcpApi;
+        readonly WebServiceIpamApi _ipamApi;
+        readonly DnsServerCore.Ipam.IpamManager _ipam;
+        readonly Security.DdiSecurityManager _security;
+        readonly WebServiceSecurityApi _securityApi;
+        readonly object _securityDeviceLock = new object();
+        readonly Dictionary<IPAddress, (Scope Scope, Lease Lease, Security.SecurityDevice Device)> _securityDevices = new();
+        DateTime _securityDeviceCacheUntil;
         readonly WebServiceAuthApi _authApi;
         readonly WebServiceClusterApi _clusterApi;
         readonly WebServiceLogsApi _logsApi;
@@ -174,6 +182,8 @@ namespace DnsServerCore
             Directory.CreateDirectory(Path.Combine(_configFolder, "zones"));
 
             _log = new LogManager(isPortableApp, _configFolder);
+            _syslog = new Logging.SyslogForwarder(_configFolder, () => _dnsServer?.ServerDomain ?? Environment.MachineName);
+            _log.SyslogForwarder = _syslog;
             _authManager = new AuthManager(this, _configFolder, _log);
 
             _api = new WebServiceApi(this, updateCheckUri);
@@ -183,6 +193,14 @@ namespace DnsServerCore
             _appsApi = new WebServiceAppsApi(this);
             _settingsApi = new WebServiceSettingsApi(this);
             _dhcpApi = new WebServiceDhcpApi(this);
+            _ipam = new DnsServerCore.Ipam.IpamManager(Path.Combine(_configFolder, "ipam.json"));
+            _ipamApi = new WebServiceIpamApi(this);
+            string suffixFile = Path.Combine(_appFolder, "Security", "public_suffix_list.dat");
+            _security = new Security.DdiSecurityManager(_configFolder, new Security.PublicSuffixes(File.ReadLines(suffixFile)));
+            _security.EventRecorded = _syslog.RecordSecurity;
+            _securityApi = new WebServiceSecurityApi(this);
+            _allocation = new DistributedAllocation(Path.Combine(_configFolder, "dhcp-allocation.json"));
+            _netbox = new Ipam.NetBoxConnector(_configFolder);
             _authApi = new WebServiceAuthApi(this);
             _clusterApi = new WebServiceClusterApi(this);
             _logsApi = new WebServiceLogsApi(this);
@@ -244,7 +262,13 @@ namespace DnsServerCore
                 }
             }
 
+            _allocationStop.Cancel();
+            await _allocation.DisposeAsync();
+            _netbox.Dispose();
             await StopAsync();
+
+            await _security.DisposeAsync();
+            await _syslog.DisposeAsync();
 
             _authManager?.Dispose();
 
@@ -459,6 +483,15 @@ namespace DnsServerCore
             foreach (AuthZoneInfo zone in zones)
             {
                 Permission zonePermission = _authManager.GetPermission(PermissionSection.Zones, zone.Name);
+
+                // Zone and permission files are saved independently. A power loss can leave
+                // a valid zone without its permission entry; restore the existing admin default.
+                if (zonePermission is null)
+                {
+                    _authManager.SetPermission(PermissionSection.Zones, zone.Name, admins, PermissionFlag.ViewModifyDelete);
+                    zonePermission = _authManager.GetPermission(PermissionSection.Zones, zone.Name);
+                    saveConfig = true;
+                }
 
                 if (!zonePermission.GroupPermissions.TryGetValue(admins, out PermissionFlag adminsPermission) || (adminsPermission != PermissionFlag.ViewModifyDelete))
                 {
@@ -690,6 +723,24 @@ namespace DnsServerCore
 
                 if (dnsSettings)
                 {
+                    if (!isConfigTransfer) _dnsServer.SaveConfigFile(true);
+                    // IPAM intent travels with shared settings. Export a coherent snapshot under its own lock.
+                    ZipArchiveEntry ipamEntry = backupZip.CreateEntry("ipam.json");
+                    using (Stream ipamStream = ipamEntry.Open())
+                    {
+                        byte[] inventory = _ipam.Export();
+                        ipamStream.Write(inventory, 0, inventory.Length);
+                    }
+                    using (Stream policyStream = backupZip.CreateEntry("security.json").Open())
+                    { byte[] policy = _security.ExportPolicy(); policyStream.Write(policy, 0, policy.Length); }
+                    using (Stream allocationStream = backupZip.CreateEntry("dhcp-allocation.json").Open())
+                    { byte[] allocation = _allocation.Export(); allocationStream.Write(allocation, 0, allocation.Length); }
+                    using (Stream netboxStream = backupZip.CreateEntry("netbox-ddi.json").Open())
+                    { byte[] configuration = _netbox.ExportConfiguration(); netboxStream.Write(configuration, 0, configuration.Length); }
+                    using (Stream signalsStream = backupZip.CreateEntry("security-signals.json").Open())
+                    { byte[] signals = _security.ExportSignals(); signalsStream.Write(signals, 0, signals.Length); }
+                    using (Stream enrichmentStream = backupZip.CreateEntry("security-misp.json").Open())
+                    { byte[] enrichment = _security.ExportEnrichment(); enrichmentStream.Write(enrichment, 0, enrichment.Length); }
                     string dnsConfigFile = Path.Combine(_configFolder, "dns.config");
 
                     if (File.Exists(dnsConfigFile) && (File.GetLastWriteTimeUtc(dnsConfigFile) > ifModifiedSince))
@@ -714,6 +765,9 @@ namespace DnsServerCore
 
                     if (File.Exists(logConfigFile) && (File.GetLastWriteTimeUtc(logConfigFile) > ifModifiedSince))
                         backupZip.CreateEntryFromFile(logConfigFile, "log.config");
+                    string syslogConfigFile = Path.Combine(_configFolder, "syslog.json");
+                    if (File.Exists(syslogConfigFile) && File.GetLastWriteTimeUtc(syslogConfigFile) > ifModifiedSince)
+                        backupZip.CreateEntryFromFile(syslogConfigFile, "syslog.json");
                 }
 
                 if (zones)
@@ -779,12 +833,12 @@ namespace DnsServerCore
                     }
                     else
                     {
-                        //backup zone files
-                        string[] zoneFiles = Directory.GetFiles(Path.Combine(_configFolder, "zones"), "*.zone", SearchOption.TopDirectoryOnly);
-                        foreach (string zoneFile in zoneFiles)
+                        // Include acknowledged runtime edits even when their delayed disk save is pending.
+                        foreach (AuthZoneInfo zone in _dnsServer.AuthZoneManager.GetZones(_ => true))
                         {
-                            string entryName = "zones/" + Path.GetFileName(zoneFile);
-                            backupZip.CreateEntryFromFile(zoneFile, entryName);
+                            using var encoded = new MemoryStream(); _dnsServer.AuthZoneManager.WriteZoneTo(zone.Name, encoded); encoded.Position = 0;
+                            using Stream entry = backupZip.CreateEntry("zones/" + zone.Name.ToLowerInvariant() + ".zone").Open();
+                            await encoded.CopyToAsync(entry);
                         }
                     }
                 }
@@ -872,12 +926,9 @@ namespace DnsServerCore
 
                 if (scopes && !isConfigTransfer)
                 {
-                    string[] scopeFiles = Directory.GetFiles(Path.Combine(_configFolder, "scopes"), "*.scope", SearchOption.TopDirectoryOnly);
-                    foreach (string scopeFile in scopeFiles)
-                    {
-                        string entryName = "scopes/" + Path.GetFileName(scopeFile);
-                        backupZip.CreateEntryFromFile(scopeFile, entryName);
-                    }
+                    foreach (Scope scope in _dhcpServer.Scopes.Values)
+                    { using var encoded = new MemoryStream(); scope.WriteTo(encoded); encoded.Position = 0; using Stream entry = backupZip.CreateEntry("scopes/" + scope.Name + ".scope").Open(); await encoded.CopyToAsync(entry); }
+
                 }
 
                 if (stats && !isConfigTransfer)
@@ -919,6 +970,7 @@ namespace DnsServerCore
 
         internal async Task RestoreConfigAsync(Stream zipStream, bool authConfig, bool clusterConfig, bool webServiceSettings, bool dnsSettings, bool logSettings, bool zones, bool allowedZones, bool blockedZones, bool blockLists, bool apps, bool scopes, bool stats, bool logs, bool deleteExistingFiles, UserSession implantSession = null, bool isConfigTransfer = false)
         {
+            using var scopeChanges = scopes && !isConfigTransfer ? _dhcpServer.BeginScopeRestore() : null;
             await using (ZipArchive backupZip = new ZipArchive(zipStream, ZipArchiveMode.Read, false, Encoding.UTF8))
             {
                 bool restartWebService = false;
@@ -927,6 +979,15 @@ namespace DnsServerCore
                 {
                     if (logSettings && !isConfigTransfer)
                     {
+                        ZipArchiveEntry syslogEntry = backupZip.GetEntry("syslog.json");
+                        if (syslogEntry is not null)
+                        {
+                            if (implantSession is not null && (implantSession.Type is not (UserSessionType.Standard or UserSessionType.ApiToken) || !_authManager.IsPermitted(PermissionSection.Administration, implantSession.User, PermissionFlag.Modify)))
+                                throw new DnsWebServiceException("Administration modify permission is required to restore syslog forwarding.");
+                            if (syslogEntry.Length > 4096) throw new ArgumentException("Syslog settings are too large.");
+                            await using Stream syslogStream = syslogEntry.Open();
+                            await _syslog.RestoreAsync(syslogStream);
+                        }
                         ZipArchiveEntry entry = backupZip.GetEntry("log.config");
                         if (entry is not null)
                         {
@@ -1052,6 +1113,29 @@ namespace DnsServerCore
 
                     if (dnsSettings)
                     {
+                        ZipArchiveEntry netboxEntry = backupZip.GetEntry("netbox-ddi.json");
+                        if (netboxEntry is not null)
+                        { using Stream source = netboxEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _netbox.RestoreConfiguration(bytes.ToArray()); }
+                        ZipArchiveEntry allocationEntry = backupZip.GetEntry("dhcp-allocation.json");
+                        if (allocationEntry is not null)
+                        { using Stream source = allocationEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); await InstallAllocationPlans(System.Text.Json.JsonSerializer.Deserialize<AllocationState>(bytes.ToArray(), DistributedAllocation.JsonOptions)); }
+                        ZipArchiveEntry securityEntry = backupZip.GetEntry("security.json");
+                        if (securityEntry is not null)
+                        { using Stream source = securityEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _security.RestorePolicy(bytes.ToArray()); }
+                        ZipArchiveEntry enrichmentEntry = backupZip.GetEntry("security-misp.json");
+                        if (enrichmentEntry is not null)
+                        { using Stream source = enrichmentEntry.Open(); using MemoryStream bytes = new(); source.CopyTo(bytes); _security.RestoreEnrichment(bytes.ToArray()); }
+                        ZipArchiveEntry signalsEntry = backupZip.GetEntry("security-signals.json");
+                        if (signalsEntry is not null)
+                        { using Stream source = signalsEntry.Open(); var signals = System.Text.Json.JsonSerializer.Deserialize<Security.SecuritySignal[]>(source, Security.DdiSecurityManager.JsonOptions); _security.MergeSignals(signals, false); }
+                        ZipArchiveEntry ipamEntry = backupZip.GetEntry("ipam.json");
+                        if (ipamEntry is not null)
+                        {
+                            using Stream ipamStream = ipamEntry.Open();
+                            using MemoryStream inventory = new MemoryStream();
+                            ipamStream.CopyTo(inventory);
+                            _ipam.Restore(inventory.ToArray());
+                        }
                         ZipArchiveEntry entry = backupZip.GetEntry("dns.config");
                         if (entry is not null)
                         {
@@ -2193,12 +2277,62 @@ namespace DnsServerCore
 
             //settings
             _webService.MapGetAndPost("/api/settings/get", _settingsApi.GetDnsSettings);
+            _webService.MapGetAndPost("/api/logging/syslog/get", GetSyslogSettings);
+            _webService.MapPost("/api/logging/syslog/set", SetSyslogSettingsAsync);
+            _webService.MapPost("/api/logging/syslog/test", SendSyslogTest);
             _webService.MapGetAndPost("/api/settings/set", _settingsApi.SetDnsSettingsAsync);
             _webService.MapGetAndPost("/api/settings/getTsigKeyNames", _settingsApi.GetTsigKeyNames);
             _webService.MapGetAndPost("/api/settings/forceUpdateBlockLists", _settingsApi.ForceUpdateBlockLists);
             _webService.MapGetAndPost("/api/settings/temporaryDisableBlocking", _settingsApi.TemporaryDisableBlocking);
             _webService.MapGetAndPost("/api/settings/backup", _settingsApi.BackupSettingsAsync);
             _webService.MapPost("/api/settings/restore", _settingsApi.RestoreSettingsAsync);
+            _webService.MapGetAndPost("/api/settings/migration/export", ExportMigrationAsync);
+            _webService.MapPost("/api/settings/migration/preview", PreviewMigrationAsync);
+            _webService.MapPost("/api/settings/migration/import", ImportMigrationAsync);
+
+            // IPAM intent uses POST mutations and the existing authenticated API pipeline.
+            _webService.MapGetAndPost("/api/ipam/list", _ipamApi.List);
+            _webService.MapGetAndPost("/api/ipam/subnets/inspect", _ipamApi.Inspect);
+            _webService.MapGetAndPost("/api/ipam/addresses/nextAvailable", _ipamApi.NextAvailable);
+            _webService.MapPost("/api/ipam/views/set", _ipamApi.SetView);
+            _webService.MapPost("/api/ipam/subnets/set", _ipamApi.SetSubnet);
+            _webService.MapPost("/api/ipam/assignments/set", _ipamApi.SetAssignment);
+            _webService.MapPost("/api/ipam/delete", _ipamApi.Delete);
+
+            _webService.MapGetAndPost("/api/security/policy/get", _securityApi.GetPolicy);
+            _webService.MapPost("/api/security/policy/set", _securityApi.SetPolicy);
+            _webService.MapGetAndPost("/api/security/events/list", _securityApi.Events);
+            _webService.MapPost("/api/security/events/analyze", _securityApi.AnalyzeEvent);
+            _webService.MapGetAndPost("/api/security/simulate", _securityApi.Simulate);
+            _webService.MapPost("/api/security/signals/ingest", _securityApi.IngestSignals);
+            _webService.MapGetAndPost("/api/security/policy/history", _securityApi.History);
+            _webService.MapPost("/api/security/policy/rollback", _securityApi.Rollback);
+            _webService.MapGetAndPost("/api/security/events/search", _securityApi.Search);
+            _webService.MapGetAndPost("/api/security/dispositions/list", _securityApi.Dispositions);
+            _webService.MapPost("/api/security/dispositions/set", _securityApi.SetDisposition);
+            _webService.MapGetAndPost("/api/ddi/dhcp/state/get", GetAllocationState);
+            _webService.MapPost("/api/ddi/dhcp/migration/check", CheckLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/status", GetLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/checkPeer", CheckLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/migration/snapshot", SnapshotLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/migration/preview", PreviewLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/stage", StageLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/migration/prepare", PrepareLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/commit", CommitLiveBootstrap);
+            _webService.MapPost("/api/ddi/dhcp/migration/commitPeer", CommitLiveBootstrapPeer);
+            _webService.MapPost("/api/ddi/dhcp/state/ingest", IngestAllocationState);
+            _webService.MapPost("/api/ddi/dhcp/plan/set", SetAllocationPlan);
+            _webService.MapPost("/api/ddi/dhcp/grant", GrantAllocation);
+            _webService.MapPost("/api/ddi/dhcp/handoff", HandoffAllocation);
+            _webService.MapGetAndPost("/api/ddi/dhcp/ownedAddresses", GetOwnedAllocationAddresses);
+            _webService.MapPost("/api/ddi/dhcp/recoverFencedOwner", RecoverFencedAllocation);
+            _webService.MapPost("/api/ddi/dhcp/recoverUnusedOwner", RecoverUnusedAllocation);
+            _webService.MapPost("/api/ddi/dhcp/prepare", PrepareAllocation);
+            _webService.MapGetAndPost("/api/ddi/dhcp/history/lookup", LookupAllocationHistory);
+            _webService.MapGetAndPost("/api/ipam/netbox/settings/get", GetNetBoxSettings);
+            _webService.MapPost("/api/ipam/netbox/settings/set", SetNetBoxSettings);
+            _webService.MapPost("/api/ipam/netbox/preview", PreviewNetBox);
+            _webService.MapPost("/api/ipam/netbox/apply", ApplyNetBox);
 
             //dhcp
             _webService.MapGetAndPost("/api/dhcp/leases/list", _dhcpApi.ListDhcpLeases);
@@ -2321,6 +2455,11 @@ namespace DnsServerCore
                 case "/api/user/logout":
                 case "/api/user/session/get":
                 case "/api/user/session/delete":
+                case "/api/security/signals/ingest":
+                case "/api/ddi/dhcp/state/ingest":
+                case "/api/ddi/dhcp/grant":
+                case "/api/ddi/dhcp/handoff":
+                case "/api/ddi/dhcp/prepare":
                     return ClusterNodeType.Secondary; //this api must be called on current node
 
                 default:
@@ -2417,6 +2556,7 @@ namespace DnsServerCore
                 case "/api/allowed/export":
                 case "/api/blocked/export":
                 case "/api/settings/backup":
+                case "/api/settings/migration/export":
                 case "/api/logs/download":
                 case "/api/logs/export":
                 case "/api/admin/cluster/primary/transferConfig":
@@ -2907,9 +3047,26 @@ namespace DnsServerCore
             {
                 //init dns server
                 _dnsServer = new DnsServer(_configFolder, Path.Combine(_appFolder, "dohwww"), _log);
+                _dnsServer.SecurityManager = _security;
+                _dnsServer.SyslogForwarder = _syslog;
 
                 //init dhcp server
                 _dhcpServer = new DhcpServer(Path.Combine(_configFolder, "scopes"), _log);
+                _dhcpServer.SecurityManager = _security;
+                _dhcpServer.Allocation = _allocation;
+                _dhcpServer.BorrowCapacity = BorrowAllocation;
+                _allocation.NodeName = () => _clusterManager?.ClusterInitialized == true ? _clusterManager.GetSelfNode().Name : _allocation.PersistedNode ?? _dnsServer.ServerDomain;
+                _security.NodeName = () => _clusterManager?.ClusterInitialized == true ? _clusterManager.GetSelfNode().Name : _dnsServer.ServerDomain;
+                _security.DeviceResolver = ResolveSecurityDevice;
+                _security.DeviceContextChanged = () => { lock (_securityDeviceLock) _securityDeviceCacheUntil = DateTime.MinValue; };
+                _security.SharedStateChanged = () => { if (_clusterManager.ClusterInitialized) _clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode(); };
+                _security.PublicationDescription = () => !_clusterManager.ClusterInitialized ? "Standalone: DNS and DHCP share local signals" : _clusterManager.GetSelfNode().Type == ClusterNodeType.Primary ? "Stored on coordinator; cluster configuration distribution requested" : "Coordinator acknowledged signal publication; replica convergence is asynchronous";
+                _security.PublishSignals = async (signals, cancellationToken) =>
+                {
+                    if (!_clusterManager.ClusterInitialized) return;
+                    if (_clusterManager.GetSelfNode().Type == ClusterNodeType.Primary) _clusterManager.TriggerNotifyAllSecondaryNodesIfPrimarySelfNode();
+                    else await _clusterManager.GetPrimaryNode().PushSecuritySignalsAsync(System.Text.Json.JsonSerializer.Serialize(signals, Security.DdiSecurityManager.JsonOptions), cancellationToken);
+                };
                 _dhcpServer.DnsServer = _dnsServer;
                 _dhcpServer.AuthManager = _authManager;
 
@@ -2972,6 +3129,10 @@ namespace DnsServerCore
                 //start dns and dhcp
                 await _dnsServer.StartAsync(throwIfBindFails);
                 _dhcpServer.Start();
+                TryRefreshIpamDiscovery();
+                _ipamDiscoveryTimer = new Timer(_ => TryRefreshIpamDiscovery(), null, 30000, 30000);
+                _security.Start();
+                _allocation.Start(SynchronizeAllocation);
 
                 _log.Write("DNS Server (v" + _currentVersion.ToString() + ") was started successfully.");
                 _isRunning = true;
@@ -2991,6 +3152,11 @@ namespace DnsServerCore
             try
             {
                 //stop cluster manager
+                if (_ipamDiscoveryTimer is not null)
+                {
+                    await _ipamDiscoveryTimer.DisposeAsync();
+                    _ipamDiscoveryTimer = null;
+                }
                 _clusterManager?.Dispose();
 
                 //stop web service
@@ -3017,6 +3183,45 @@ namespace DnsServerCore
 
         #region properties
 
+        Security.SecurityDevice ResolveSecurityDevice(IPAddress address)
+        {
+            lock (_securityDeviceLock)
+            {
+                DateTime now = DateTime.UtcNow;
+                if (_securityDeviceCacheUntil <= now)
+                {
+                    _securityDevices.Clear(); HashSet<IPAddress> ambiguous = [];
+                    var subnets = _ipam.GetSubnets();
+                    foreach (var scope in _dhcpServer.Scopes.Values)
+                    {
+                        var subnet = Array.Find(subnets, s => string.Equals(s.DhcpScope, scope.Name, StringComparison.OrdinalIgnoreCase));
+                        foreach (var lease in scope.Leases.Values)
+                            if (lease.LeaseExpires > now && !ambiguous.Contains(lease.Address))
+                            {
+                                if (_securityDevices.ContainsKey(lease.Address)) { _securityDevices.Remove(lease.Address); ambiguous.Add(lease.Address); continue; }
+                                _securityDevices[lease.Address] = (scope, lease, new(scope.Name, lease.ClientIdentifier.ToString(), BitConverter.ToString(lease.HardwareAddress), lease.HostName, subnet?.ViewId ?? "", subnet?.Site ?? "", subnet?.Vlan));
+                            }
+                    }
+                    _securityDeviceCacheUntil = now.AddSeconds(1);
+                }
+                if (_securityDevices.TryGetValue(address, out var context) && context.Lease.LeaseExpires > now && context.Scope.Leases.TryGetValue(context.Lease.ClientIdentifier, out var active) && ReferenceEquals(context.Lease, active))
+                {
+                    if (address.AddressFamily == AddressFamily.InterNetwork && _allocation.HasLiveConflict(AllocationSequence.Number(address), context.Device.ClientIdentifier, context.Device.HardwareAddress)) return null;
+                    return context.Device;
+                }
+                if (address.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    var synchronized = _allocation.ResolveLive(AllocationSequence.Number(address));
+                    if (synchronized is not null)
+                    {
+                        var subnet = Array.Find(_ipam.GetSubnets(), s => string.Equals(s.DhcpScope, synchronized.Scope, StringComparison.OrdinalIgnoreCase));
+                        return new(synchronized.Scope, synchronized.Lease.Client, synchronized.Lease.Hardware, synchronized.Lease.Host, subnet?.ViewId ?? "", subnet?.Site ?? "", subnet?.Vlan);
+                    }
+                }
+                return null;
+            }
+        }
+
         public DnsServer DnsServer
         { get { return _dnsServer; } }
 
@@ -3025,6 +3230,8 @@ namespace DnsServerCore
 
         public string ConfigFolder
         { get { return _configFolder; } }
+
+        public string ProductVersion => typeof(DnsWebService).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "Development";
 
         public string Version
         { get { return GetCleanVersion(_currentVersion); } }

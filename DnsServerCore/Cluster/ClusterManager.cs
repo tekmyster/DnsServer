@@ -27,6 +27,7 @@ using DnsServerCore.HttpApi.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -1136,11 +1137,11 @@ namespace DnsServerCore.Cluster
                 ttl = _dnsWebService.DnsServer.AuthZoneManager.DefaultNsRecordTtl;
 
             IReadOnlyDictionary<int, ClusterNode> clusterNodes = _clusterNodes;
-            DnsResourceRecord[] nsRecords = new DnsResourceRecord[clusterNodes.Count];
+            DnsResourceRecord[] nsRecords = new DnsResourceRecord[clusterNodes.Values.Count(n => !n.IsFenced)];
             int i = 0;
 
             foreach (KeyValuePair<int, ClusterNode> clusterNode in clusterNodes)
-                nsRecords[i++] = new DnsResourceRecord(zoneInfo.Name, DnsResourceRecordType.NS, DnsClass.IN, ttl, new DnsNSRecordData(clusterNode.Value.Name));
+                if (!clusterNode.Value.IsFenced) nsRecords[i++] = new DnsResourceRecord(zoneInfo.Name, DnsResourceRecordType.NS, DnsClass.IN, ttl, new DnsNSRecordData(clusterNode.Value.Name));
 
             //set NS record
             _dnsWebService.DnsServer.AuthZoneManager.SetRecords(zoneInfo.Name, nsRecords);
@@ -1221,7 +1222,7 @@ namespace DnsServerCore.Cluster
 
             foreach (KeyValuePair<int, ClusterNode> clusterNode in clusterNodes)
             {
-                if (clusterNode.Value.Type == ClusterNodeType.Primary)
+                if (clusterNode.Value.Type == ClusterNodeType.Primary || clusterNode.Value.IsFenced)
                     continue;
 
                 foreach (IPAddress ipAddress in clusterNode.Value.IPAddresses)
@@ -1295,7 +1296,7 @@ namespace DnsServerCore.Cluster
 
                 foreach (KeyValuePair<int, ClusterNode> clusterNode in clusterNodes)
                 {
-                    if (clusterNode.Value.Type == ClusterNodeType.Primary)
+                    if (clusterNode.Value.Type == ClusterNodeType.Primary || clusterNode.Value.IsFenced)
                         continue; //skip primary cluster node
 
                     tasks.Add(clusterNode.Value.NotifySecondaryNodeAsync(primaryNode));
@@ -1946,8 +1947,9 @@ namespace DnsServerCore.Cluster
                 SaveConfigFile();
         }
 
-        public async Task PromoteToPrimaryNodeAsync(bool forceDeletePrimary)
+        public async Task PromoteToPrimaryNodeAsync(bool forceDeletePrimary, bool retainFencedPrimary = false)
         {
+            if (retainFencedPrimary && !forceDeletePrimary) throw new ArgumentException("Fenced promotion requires force mode after verified external fencing.");
             if (!ClusterInitialized)
                 throw new DnsServerException("Failed to promote to Primary node: the Cluster is not initialized.");
 
@@ -1992,7 +1994,11 @@ namespace DnsServerCore.Cluster
             foreach (KeyValuePair<int, ClusterNode> existingClusterNode in existingClusterNodes)
             {
                 if (existingClusterNode.Key == existingPrimaryNode.Id)
+                {
+                    if (retainFencedPrimary)
+                        updatedClusterNodes[existingPrimaryNode.Id] = new ClusterNode(this, existingPrimaryNode.Id, existingPrimaryNode.Url, existingPrimaryNode.IPAddresses, ClusterNodeType.Secondary, ClusterNodeState.Fenced);
                     continue;
+                }
 
                 updatedClusterNodes[existingClusterNode.Key] = existingClusterNode.Value;
             }

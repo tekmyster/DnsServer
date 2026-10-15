@@ -46,7 +46,8 @@ namespace DnsServerCore.Cluster
         Unknown = 0,
         Self = 1,
         Connected = 2,
-        Unreachable = 3
+        Unreachable = 3,
+        Fenced = 4
     }
 
     class ClusterNode : IComparable<ClusterNode>, IDisposable
@@ -60,6 +61,7 @@ namespace DnsServerCore.Cluster
         IReadOnlyList<IPAddress> _ipAddresses;
         ClusterNodeType _type;
         ClusterNodeState _state;
+        readonly bool _fenced;
 
         string _version;
         DateTime _upSince;
@@ -81,6 +83,7 @@ namespace DnsServerCore.Cluster
             _url = nodeInfo.Url;
             _ipAddresses = nodeInfo.IPAddresses.Convert(IPAddress.Parse);
             _type = Enum.Parse<ClusterNodeType>(nodeInfo.Type, true);
+            _fenced = nodeInfo.State == nameof(ClusterNodeState.Fenced);
 
             if (_type == ClusterNodeType.Primary)
             {
@@ -111,6 +114,7 @@ namespace DnsServerCore.Cluster
             _ipAddresses = ipAddresses;
             _type = type;
             _state = state;
+            _fenced = state == ClusterNodeState.Fenced;
         }
 
         public ClusterNode(ClusterManager clusterManager, BinaryReader bR)
@@ -148,7 +152,8 @@ namespace DnsServerCore.Cluster
                     throw new InvalidDataException("Cluster Node version not supported.");
             }
 
-            if (_state != ClusterNodeState.Self)
+            _fenced = _state == ClusterNodeState.Fenced;
+            if (_state != ClusterNodeState.Self && !_fenced)
                 _state = ClusterNodeState.Unknown;
         }
 
@@ -189,6 +194,7 @@ namespace DnsServerCore.Cluster
 
         private HttpApiClient GetApiClient()
         {
+            if (_fenced) throw new InvalidOperationException("Node is fenced; recover and re-enroll it before using its service APIs.");
             if (_state == ClusterNodeState.Self)
                 throw new InvalidOperationException();
 
@@ -359,6 +365,7 @@ namespace DnsServerCore.Cluster
 
         public void InitializeHeartbeatTimer()
         {
+            if (_fenced) return;
             if (_state == ClusterNodeState.Self)
                 throw new InvalidOperationException();
 
@@ -373,6 +380,7 @@ namespace DnsServerCore.Cluster
 
         public void UpdateHeartbeatTimer()
         {
+            if (_fenced) return;
             if (_state == ClusterNodeState.Self)
                 throw new InvalidOperationException();
 
@@ -600,6 +608,22 @@ namespace DnsServerCore.Cluster
             }
         }
 
+        public Task PushSecuritySignalsAsync(string signals, CancellationToken cancellationToken = default)
+        {
+            if (_type != ClusterNodeType.Primary) throw new InvalidOperationException("Security signals must go to the cluster primary.");
+            return GetApiClient().PushSecuritySignalsAsync(signals, cancellationToken);
+        }
+        public Task<byte[]> GetAllocationStateAsync(CancellationToken cancellationToken = default)
+            => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/state/get", cancellationToken: cancellationToken);
+        public Task<byte[]> BootstrapAllocationAsync(string action, IReadOnlyDictionary<string, string> fields, CancellationToken cancellationToken = default)
+            => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/migration/" + action, fields, cancellationToken);
+        public async Task PrepareAllocationAsync(string state, CancellationToken cancellationToken = default)
+            => await GetApiClient().AllocationRequestAsync("api/ddi/dhcp/prepare", new Dictionary<string, string> { ["state"] = state }, cancellationToken);
+        public async Task PushAllocationStateAsync(string state, CancellationToken cancellationToken = default)
+            => await GetApiClient().AllocationRequestAsync("api/ddi/dhcp/state/ingest", new Dictionary<string, string> { ["state"] = state }, cancellationToken);
+        public Task<byte[]> GrantAllocationAsync(string scope, string borrower, string requestId, CancellationToken cancellationToken = default)
+            => GetApiClient().AllocationRequestAsync("api/ddi/dhcp/grant", new Dictionary<string, string> { ["scope"] = scope, ["borrower"] = borrower, ["requestId"] = requestId }, cancellationToken);
+
         public async Task AskSecondaryNodeToLeaveClusterAsync(CancellationToken cancellationToken = default)
         {
             if (_type != ClusterNodeType.Secondary)
@@ -701,7 +725,7 @@ namespace DnsServerCore.Cluster
                 ipAddress.WriteTo(bW);
 
             bW.Write((byte)_type);
-            bW.Write((byte)_state);
+            bW.Write((byte)State);
         }
 
         public override string ToString()
@@ -734,7 +758,9 @@ namespace DnsServerCore.Cluster
         { get { return _type; } }
 
         public ClusterNodeState State
-        { get { return _state; } }
+        { get { return _fenced ? ClusterNodeState.Fenced : _state; } }
+
+        public bool IsFenced => _fenced;
 
         public string Version
         {

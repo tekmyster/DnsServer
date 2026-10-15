@@ -2,6 +2,8 @@
 # Set default behavior to automatically normalize line endings.
 ###############################################################################
 * text=auto
+# Preserve the upstream Public Suffix List bytes and its documented SHA256.
+DnsServerCore/Security/public_suffix_list.dat -text
 *.sh text eol=lf
 supervisor.conf text eol=lf
 systemd.service text eol=lf

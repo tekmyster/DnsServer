@@ -1,0 +1,42 @@
+/* teQtanium presentation; service contracts retain their upstream identifiers. */
+#header, .light-mode #header, .dark-mode #header, .amber-mode #header {
+    background: #242628 !important;
+    box-shadow: none !important;
+    border-bottom: 1px solid #646b72;
+}
+#header .title > a { display: inline-flex; align-items: center; height: 32px; text-decoration: none; }
+#header .title .text { font-family: inherit; font-size: 22px; letter-spacing: -.4px; margin-left: 7px; }
+#footer, .dark-mode #footer, .light-mode #footer { box-shadow: none !important; }
+.dark-mode { --tectanium-focus: #edf0f2; }
+.dark-mode .btn-primary, .dark-mode .label-primary, .dark-mode .pagination > .active > a,
+.dark-mode .pagination > .active > span {
+    background: #d6dbe0; border-color: #d6dbe0; color: #202326;
+}
+.dark-mode .btn-primary:hover, .dark-mode .btn-primary:focus, .dark-mode .btn-primary:active,
+.dark-mode .btn-primary.active { background: #f2f3f4; border-color: #f2f3f4; color: #202326; }
+.dark-mode .btn-primary.disabled, .dark-mode .btn-primary[disabled] {
+    background: #d6dbe0; border-color: #d6dbe0; color: #202326;
+}
+.dark-mode .nav-pills > li.active > a, .dark-mode .nav-pills > li.active > a:hover,
+.dark-mode .nav-pills > li.active > a:focus { background: #d6dbe0; color: #202326 !important; }
+.dark-mode .nav > li > a:hover, .dark-mode .nav > li > a:focus { background: #3b3f43; }
+.dark-mode .text-primary, .dark-mode .text-info { color: #d6dbe0; }
+.dark-mode .form-control:focus { border-color: #edf0f2 !important; box-shadow: 0 0 0 1px #edf0f2; }
+.dark-mode :focus-visible { outline: 2px solid var(--tectanium-focus); outline-offset: 3px; }
+.dark-mode .alert-success { background: #233c2b; color: #c5e8ce; border-color: #65836c; }
+.dark-mode .alert-info { background: #2c343b; color: #d6e3ef; border-color: #758494; }
+.dark-mode .alert-warning { background: #44381f; color: #f7dfa5; border-color: #a08a57; }
+.dark-mode .alert-danger { background: #48292c; color: #ffced2; border-color: #a56c72; }
+.dark-mode .text-danger { color: #ffb0b7; }
+.dark-mode .text-success { color: #a9dcb5; }
+.dark-mode .text-warning { color: #f7dfa5; }
+.dark-mode code { color: #ffb0b7; }
+.dark-mode .btn-warning, .dark-mode .label-warning { background-color: #8a5500; border-color: #ad7930; }
+.dark-mode .btn-warning:hover, .dark-mode .btn-warning:focus { background-color: #714500; }
+.dark-mode .form-control::placeholder { color: #b8bec4; opacity: 1; }
+.dark-mode hr { border-color: #646b72; }
+.dark-mode .stats-panel .total-queries, .dark-mode .stats-panel .clients,
+.dark-mode .stats-panel .auth-hit, .dark-mode .stats-panel .recursions,
+.dark-mode .stats-panel .cache-hit, .dark-mode .zone-stats-panel .stats-item { background: #3b3f43; }
+.dark-mode #header .title > a, .dark-mode #header .title > a:visited { color: #f2f3f4; }
+@media (max-width: 480px) { #header .title .text { font-size: 20px; } }

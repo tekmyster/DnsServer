@@ -1,4 +1,4 @@
-﻿/*
+/*
 Technitium DNS Server
 Copyright (C) 2026  Shreyas Zare (shreyas@technitium.com)
 
@@ -110,7 +110,7 @@ function showPageMain() {
     $("#divDhcpViewScopes").show();
     $("#divDhcpEditScope").hide();
 
-    $("#txtDnsClientNameServer").val("This Server {this-server}");
+    $("#txtDnsClientNameServer").val("This server");
     $("#txtDnsClientDomain").val("");
     $("#optDnsClientType").val("A");
     $("#optDnsClientProtocol").val("UDP");
@@ -234,9 +234,13 @@ function showPageMain() {
 
     if (sessionData.info.permissions.Settings.canView) {
         $("#mainPanelTabListSettings").show();
+        $("#mainPanelTabListIpam").show();
+        $("#mainPanelTabListSecurity").show();
     }
     else {
         $("#mainPanelTabListSettings").hide();
+        $("#mainPanelTabListIpam").hide();
+        $("#mainPanelTabListSecurity").hide();
     }
 
     if (sessionData.info.permissions.DhcpServer.canView) {
@@ -279,8 +283,8 @@ $(function () {
 
     var headerHtml = $("#header").html();
 
-    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/logo25x25.png\" alt=\"Technitium Logo\" /><span class=\"text\" style=\"color: #ffffff;\">Technitium</span></a>" + headerHtml + "</div>");
-    $("#footer").html("<div class=\"content\"><a href=\"https://technitium.com/\" target=\"_blank\">Technitium</a> | <a href=\"https://blog.technitium.com/\" target=\"_blank\">Blog</a> | <a href=\"https://go.technitium.com/?id=35\" target=\"_blank\">Donate</a> | <a href=\"https://dnsclient.net/\" target=\"_blank\">DNS Client</a> | <a href=\"https://github.com/TechnitiumSoftware/DnsServer\" target=\"_blank\"><i class=\"fa fa-github\"></i>&nbsp;GitHub</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
+    $("#header").html("<div class=\"title\"><a href=\".\"><img src=\"img/teqtanium.svg\" alt=\"\" width=\"25\" height=\"25\" /><span class=\"text\" style=\"color: #ffffff;\">teQtanium</span></a>" + headerHtml + "</div>");
+    $("#footer").html("<div class=\"content\"><a href=\"https://github.com/tekmyster/teQtanium-DDI-Server\" target=\"_blank\">teQtanium source</a> | <a href=\"https://github.com/tekmyster/teQtanium-DDI-Server/issues\" target=\"_blank\">Support</a> | <a href=\"#\" onclick=\"showAbout(); return false;\">About</a></div>");
 
     loadQuickBlockLists();
     loadQuickForwardersList();
@@ -659,7 +663,7 @@ $(function () {
 
 function showAbout() {
     if ($("#pageLogin").is(":visible")) {
-        window.open("https://technitium.com/aboutus.html", "_blank");
+        window.open("https://arqilo.com", "_blank");
     }
     else {
         $("#mainPanelTabListDashboard").removeClass("active");
@@ -897,7 +901,7 @@ function loadQuickForwardersListFrom(responseJSON) {
     $("#optQuickForwarders").html(htmlList);
 }
 
-function refreshDnsSettings() {
+function refreshDnsSettings(keepFeedback) {
     var divDnsSettingsLoader = $("#divDnsSettingsLoader");
     var divDnsSettings = $("#divDnsSettings");
 
@@ -910,11 +914,13 @@ function refreshDnsSettings() {
     HTTPRequest({
         url: "api/settings/get?node=" + encodeURIComponent(node),
         token: sessionData.token,
+        dontHideAlert: keepFeedback === true,
         success: function (responseJSON) {
             if ((node == "") || (node == "cluster") || (node == sessionData.info.dnsServerDomain))
                 updateDnsSettingsDataAndGui(responseJSON);
 
             loadDnsSettings(responseJSON);
+            refreshSyslogSettings();
             checkForReverseProxy(responseJSON);
 
             if (sessionData.info.permissions.Settings.canModify) {
@@ -1159,8 +1165,8 @@ function updateDnsSettingsDataAndGui(responseJSON) {
     sessionData.info.dnsServerDomain = responseJSON.response.dnsServerDomain;
     sessionData.info.uptimestamp = responseJSON.response.uptimestamp; //update timestamp since server may have restarted during current session
 
-    document.title = responseJSON.response.dnsServerDomain + " - " + "Technitium DNS Server v" + responseJSON.response.version;
-    $("#lblAboutVersion").text(responseJSON.response.version);
+    document.title = responseJSON.response.dnsServerDomain + " - " + "teQtanium DDI Server · " + (responseJSON.response.productVersion || "Development");
+    $("#lblAboutVersion").text(responseJSON.response.productVersion || "Development");
     $("#lblAboutUptime").text(moment(responseJSON.response.uptimestamp).local().format("lll") + " (" + moment(responseJSON.response.uptimestamp).fromNow() + ")");
     $("#lblDnsServerDomain").text(" - " + responseJSON.response.dnsServerDomain);
 }
@@ -3089,13 +3095,11 @@ function backupSettings(objBtn) {
     HTTPRequest({
         url: "api/user/createSingleUseToken",
         token: sessionData.token,
-        success: function (responseJSON) {
-            btn.button("reset");
-
-            window.open("api/settings/backup?token=" + responseJSON.response.token + "&authConfig=" + authConfig + "&clusterConfig=" + clusterConfig + "&webServiceSettings=" + webServiceSettings + "&dnsSettings=" + dnsSettings + "&logSettings=" + logSettings + "&zones=" + zones + "&allowedZones=" + allowedZones + "&blockedZones=" + blockedZones + "&blockLists=" + blockLists + "&apps=" + apps + "&scopes=" + scopes + "&stats=" + stats + "&logs=" + logs + "&node=" + encodeURIComponent(node) + "&ts=" + (new Date().getTime()), "_blank");
-
-            $("#modalBackupSettings").modal("hide");
-            showAlert("success", "Backed Up!", "Settings were backed up successfully.");
+        success: async function (responseJSON) {
+            var url = "api/settings/backup?token=" + responseJSON.response.token + "&authConfig=" + authConfig + "&clusterConfig=" + clusterConfig + "&webServiceSettings=" + webServiceSettings + "&dnsSettings=" + dnsSettings + "&logSettings=" + logSettings + "&zones=" + zones + "&allowedZones=" + allowedZones + "&blockedZones=" + blockedZones + "&blockLists=" + blockLists + "&apps=" + apps + "&scopes=" + scopes + "&stats=" + stats + "&logs=" + logs + "&node=" + encodeURIComponent(node);
+            if (await downloadDdiArchive(url, btn, divBackupSettingsAlert, "ddi-backup.zip")) {
+                $("#modalBackupSettings").modal("hide"); showAlert("success", "Backup ready", "The archive is ready to save.");
+            }
         },
         error: function () {
             btn.button("reset");
@@ -3224,7 +3228,7 @@ function initTheme() {
     }
 
     const currentTheme = localStorage.getItem("theme");
-    changeTheme(currentTheme);
+    changeTheme(currentTheme == null ? "dark" : currentTheme);
 }
 
 function changeTheme(newTheme) {
@@ -3253,6 +3257,14 @@ function changeTheme(newTheme) {
     }
 
     localStorage.setItem("theme", newTheme);
+
+    var chartText = document.body.classList.contains('amber-mode') ? '#ffb000' : document.body.classList.contains('dark-mode') ? '#dcdcdc' : '#555555';
+    Chart.defaults.global.defaultFontColor = chartText;
+    [window.chartDashboardMain, window.chartDashboardPie, window.chartDashboardPie2, window.chartDashboardPie3].forEach(function (chart) {
+        if (!chart) return;
+        if (chart.options.legend && chart.options.legend.labels) chart.options.legend.labels.fontColor = chartText;
+        if (chart.options.scales) ['xAxes', 'yAxes'].forEach(function (axis) { (chart.options.scales[axis] || []).forEach(function (scale) { if (scale.ticks) scale.ticks.fontColor = chartText; }); });
+    });
 
     if (window.chartDashboardMain) {
         window.chartDashboardMain.update();

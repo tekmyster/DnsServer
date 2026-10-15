@@ -19,7 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 .dark-mode {
     scrollbar-width: thin;
-    scrollbar-color: #555 #2c2c2e;
+    scrollbar-color: #555 #292c2f;
 }
 
     .dark-mode ::-webkit-scrollbar {
@@ -28,35 +28,41 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     }
 
     .dark-mode ::-webkit-scrollbar-track {
-        background: #2c2c2e;
+        background: #292c2f;
     }
 
     .dark-mode ::-webkit-scrollbar-thumb {
         background-color: #555;
         border-radius: 6px;
-        border: 3px solid #2c2c2e;
+        border: 3px solid #292c2f;
     }
 
 @media (prefers-color-scheme: dark) {
     body {
-        background-color: #1a1a1a;
+        background-color: #1c1e20;
     }
 
     #header {
-        background-color: #2c2c2e;
+        background-color: #292c2f;
         box-shadow: 0px 1px 15px 0px #000;
     }
 
     #footer {
-        background-color: #252525;
+        background-color: #242628;
         box-shadow: 0px 2px 15px 1px #000;
     }
 }
 
 body.dark-mode {
-    background-color: #1a1a1a !important;
+    background-color: #1c1e20 !important;
     color: #dcdcdc !important;
 }
+
+body.dark-mode a:not(.btn):not(.label), body.dark-mode a:not(.btn):not(.label):visited,
+.dark-mode #footer .content a {
+    color: #d6dbe0;
+}
+.dark-mode .text-muted, .dark-mode .help-block { color: #ababab !important; }
 
 .dark-mode th a,
 .dark-mode th a:hover {
@@ -65,12 +71,12 @@ body.dark-mode {
 }
 
 .dark-mode #header {
-    background-color: #2c2c2e !important;
+    background-color: #292c2f !important;
     box-shadow: 0px 1px 15px 0px #000 !important;
 }
 
 .dark-mode #footer {
-    background-color: #252525 !important;
+    background-color: #242628 !important;
     box-shadow: 0px 2px 15px 1px #000 !important;
     color: #888888 !important;
 }
@@ -93,34 +99,34 @@ body.dark-mode {
 
 .dark-mode .panel,
 .dark-mode .panel-default {
-    background-color: #2c2c2e !important;
-    border-color: #3a3a3c !important;
+    background-color: #292c2f !important;
+    border-color: #3b3f43 !important;
 }
 
 .dark-mode .panel-heading {
-    background-color: #3a3a3c !important;
-    border-color: #4a4a4c !important;
+    background-color: #3b3f43 !important;
+    border-color: #646b72 !important;
     color: #f5f5f7 !important;
 }
 
 .dark-mode .panel-body {
-    background-color: #252525 !important;
+    background-color: #242628 !important;
     color: #dcdcdc !important;
 }
 
 .dark-mode .navbar-default {
-    background-color: #2c2c2e !important;
-    border-color: #3a3a3c !important;
+    background-color: #292c2f !important;
+    border-color: #3b3f43 !important;
 }
 
 .dark-mode .dropdown-menu {
-    background-color: #2c2c2e !important;
-    border-color: #3a3a3c !important;
+    background-color: #292c2f !important;
+    border-color: #3b3f43 !important;
 }
 
     .dark-mode .dropdown-menu > li > a:hover,
     .dark-mode .dropdown-menu > li > a:focus {
-        background-color: #3a3a3c !important;
+        background-color: #3b3f43 !important;
     }
 
     .dark-mode .dropdown-menu li a {
@@ -128,24 +134,24 @@ body.dark-mode {
     }
 
 .dark-mode .divider {
-    background-color: #3a3a3c !important;
+    background-color: #3b3f43 !important;
 }
 
 .dark-mode .nav-tabs {
-    border-bottom: 1px solid #007aff !important;
+    border-bottom: 1px solid #b9c0c7 !important;
 }
 
     .dark-mode .nav-tabs > li > a:hover {
-        border-color: #4a4a4c !important;
-        border-bottom-color: #007aff !important;
-        background-color: #3a3a3c;
+        border-color: #646b72 !important;
+        border-bottom-color: #b9c0c7 !important;
+        background-color: #3b3f43;
     }
 
     .dark-mode .nav-tabs > li.active > a,
     .dark-mode .nav-tabs > li.active > a:hover,
     .dark-mode .nav-tabs > li.active > a:focus {
-        background-color: #252525;
-        border-color: #007aff !important;
+        background-color: #242628;
+        border-color: #b9c0c7 !important;
         color: #ffffff !important;
         border-bottom-color: transparent !important;
     }
@@ -162,64 +168,64 @@ body.dark-mode {
 .dark-mode .table > tbody > tr > td,
 .dark-mode .table > tfoot > tr > th,
 .dark-mode .table > tfoot > tr > td {
-    border-top-color: #3a3a3c !important;
+    border-top-color: #3b3f43 !important;
 }
 
 .dark-mode .table-bordered,
 .dark-mode .table-bordered > thead > tr > th,
 .dark-mode .table-bordered > tbody > tr > td {
-    border-color: #3a3a3c !important;
+    border-color: #3b3f43 !important;
 }
 
 .dark-mode .form-control {
-    background-color: #3a3a3c !important;
-    border-color: #4a4a4c !important;
+    background-color: #3b3f43 !important;
+    border-color: #646b72 !important;
     color: #f5f5f7 !important;
 }
 
     .dark-mode .form-control[disabled], .dark-mode .form-control[readonly] {
-        background-color: #2c2c2e !important;
+        background-color: #292c2f !important;
     }
 
 .dark-mode .modal-content {
-    background-color: #2c2c2e !important;
-    border-color: #3a3a3c !important;
+    background-color: #292c2f !important;
+    border-color: #3b3f43 !important;
 }
 
 .dark-mode .modal-header {
-    border-bottom-color: #3a3a3c !important;
+    border-bottom-color: #3b3f43 !important;
 }
 
 .dark-mode .modal-footer {
-    border-top-color: #3a3a3c !important;
+    border-top-color: #3b3f43 !important;
 }
 
 .dark-mode .well {
-    background-color: #252525 !important;
-    border-color: #3a3a3c !important;
+    background-color: #242628 !important;
+    border-color: #3b3f43 !important;
 }
 
 .dark-mode pre {
     background-color: #222 !important;
     color: #dcdcdc !important;
-    border: 1px solid #4a4a4c !important;
+    border: 1px solid #646b72 !important;
 }
 
 .dark-mode .btn-default {
     color: #f5f5f7 !important;
-    background-color: #3a3a3c !important;
-    border-color: #4a4a4c !important;
+    background-color: #3b3f43 !important;
+    border-color: #646b72 !important;
 }
 
     .dark-mode .btn-default:hover,
     .dark-mode .btn-default.active {
-        background-color: #4a4a4c !important;
+        background-color: #646b72 !important;
         border-color: #5a5a5c !important;
     }
 
 .dark-mode .input-group-addon {
-    background-color: #3a3a3c !important;
-    border-color: #4a4a4c !important;
+    background-color: #3b3f43 !important;
+    border-color: #646b72 !important;
 }
 
 .dark-mode .stats-panel .stats-item,
@@ -234,7 +240,7 @@ body.dark-mode {
 }
 
 .dark-mode .c3-grid line {
-    stroke: #4a4a4c !important;
+    stroke: #646b72 !important;
 }
 
 .dark-mode input[type="datetime-local"] {
@@ -246,18 +252,18 @@ body.dark-mode {
     }
 
 .dark-mode .pager li > a {
-    background-color: #3a3a3c !important;
-    border-color: #4a4a4c !important;
+    background-color: #3b3f43 !important;
+    border-color: #646b72 !important;
 }
 
     .dark-mode .pager li > a:hover {
-        background-color: #4a4a4c !important;
+        background-color: #646b72 !important;
     }
 
 .dark-mode .pagination li:not(.active) a {
     color: white;
-    background-color: #252525;
-    border: 1px solid #337ab7;
+    background-color: #242628;
+    border: 1px solid #646b72;
 }
 
     .dark-mode .pagination li:not(.active) a:hover {

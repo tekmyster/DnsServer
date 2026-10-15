@@ -25,6 +25,7 @@ using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -59,6 +60,7 @@ namespace DnsServerCore
             private void WriteClusterState(Utf8JsonWriter jsonWriter, bool includeServerIpAddresses = false)
             {
                 jsonWriter.WriteString("version", _dnsWebService.GetServerVersion());
+                jsonWriter.WriteString("productVersion", _dnsWebService.ProductVersion);
                 jsonWriter.WriteString("dnsServerDomain", _dnsWebService._dnsServer.ServerDomain);
                 jsonWriter.WriteBoolean("clusterInitialized", _dnsWebService._clusterManager.ClusterInitialized);
 
@@ -341,6 +343,10 @@ namespace DnsServerCore
 
                 int secondaryNodeId = request.GetQueryOrForm("secondaryNodeId", int.Parse);
 
+                if (_dnsWebService._clusterManager.ClusterNodes.TryGetValue(secondaryNodeId, out var fencedCandidate) && fencedCandidate.IsFenced
+                    && _dnsWebService._allocation.Snapshot().Plans.Any(p => p.Owners.Contains(fencedCandidate.Name)))
+                    throw new DnsWebServiceException("This fenced node still anchors DHCP ownership. Complete ownership migration before deleting it.");
+
                 ClusterNode secondaryNode = _dnsWebService._clusterManager.DeleteSecondaryNode(secondaryNodeId);
 
                 _dnsWebService._log.Write(_dnsWebService.GetRemoteEndPoint(context), "[" + sessionUser.Username + "] Secondary node '" + secondaryNode.ToString() + "' was deleted from the Cluster (" + _dnsWebService._clusterManager.ClusterDomain + ") successfully.");
@@ -581,9 +587,18 @@ namespace DnsServerCore
                 HttpRequest request = context.Request;
 
                 bool forceDeletePrimary = request.GetQueryOrForm("forceDeletePrimary", bool.Parse, false);
+                bool retainFencedPrimary = request.GetQueryOrForm("retainFencedPrimary", bool.Parse, false);
+                if (retainFencedPrimary)
+                {
+                    string owner = _dnsWebService._clusterManager.GetPrimaryNode().Name;
+                    string receiver = _dnsWebService._clusterManager.GetSelfNode().Name;
+                    foreach (var plan in _dnsWebService._allocation.Snapshot().Plans)
+                        if (plan.Owners.Contains(owner) && !_dnsWebService._allocation.EntireOwnerSurrendered(plan.Scope, owner, receiver))
+                            throw new DnsWebServiceException("Complete the fenced owner's durable capacity handoff before promotion.");
+                }
 
                 //promote to primary node
-                await _dnsWebService._clusterManager.PromoteToPrimaryNodeAsync(forceDeletePrimary);
+                await _dnsWebService._clusterManager.PromoteToPrimaryNodeAsync(forceDeletePrimary, retainFencedPrimary);
 
                 _dnsWebService._log.Write(_dnsWebService.GetRemoteEndPoint(context), "[" + sessionUser.Username + "] This Secondary node was promoted to be a Primary node for the Cluster successfully.");
 

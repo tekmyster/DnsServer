@@ -42,6 +42,11 @@ body.amber-mode {
     color: #ffb000 !important;
 }
 
+body.amber-mode a:not(.btn):not(.label), body.amber-mode a:not(.btn):not(.label):visited,
+.amber-mode #footer .content a { color: #ffc862; }
+.amber-mode :focus-visible { outline-color: #ffc862; }
+.amber-mode .text-muted, .amber-mode .help-block { color: #d6a76a !important; }
+
 .amber-mode th a,
 .amber-mode th a:hover {
     color: #ffb000 !important;
@@ -315,7 +320,7 @@ body.amber-mode {
 
 .amber-mode .btn-warning {
     color: #fff;
-    background-color: #c57a11;
+    background-color: #8a5500;
     border-color: #e39431;
 }
 

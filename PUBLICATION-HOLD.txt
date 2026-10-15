@@ -1,0 +1,3 @@
+All fork-specific code differences must remain private, per the owner's latest instruction.
+Do not push pending changes to public GitHub or publish public source, binaries, containers, installers, or CI artifacts.
+Existing GPL notices remain in force. Private builds and deployments may continue.

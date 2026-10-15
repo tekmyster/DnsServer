@@ -1,13 +1,14 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <title>Technitium DNS Server</title>
+    <title>teQtanium DDI Server</title>
+    <link rel="icon" type="image/svg+xml" href="img/teqtanium.svg" />
 
-    <link href="/css/main.css" rel="stylesheet" />
     <link href="/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="/css/main.css" rel="stylesheet" />
 
     <script src="/js/jquery.min.js"></script>
     <script src="/js/main.js"></script>
@@ -17,26 +18,26 @@
         <div class="container">
             <div class="features" style="text-align: center; margin-top: 60px;">
                 <a href="/">
-                    <img src="/img/logo.png" alt="Technitium Logo" />
+                    <img src="/img/teqtanium.svg" width="96" height="96" alt="teQtanium" />
                 </a>
-                <h1>Technitium DNS Server</h1>
-                <p style="max-width: 800px; margin-right: auto; margin-left: auto;">This server supports encrypted DNS protocol (DNS-over-HTTPS) that you can use with your web browser like Mozilla Firefox.</p>
+                <h1>teQtanium DDI Server</h1>
+                <p style="max-width: 800px; margin-right: auto; margin-left: auto;">Use DNS over HTTPS to encrypt DNS requests between your client and this server.</p>
 
-                <h3 style="margin-top: 40px;">The Encrypted DNS Service URL</h3>
+                <h3 style="margin-top: 40px;">DNS over HTTPS address</h3>
                 <p>
-                    Use the following URL to configure your clients for consuming the DNS-over-HTTPS service.
+                    Enter this address in your client’s DNS over HTTPS settings.
                 </p>
                 <p style="font-size: 16px; font-weight: bold;">
                     <a id="lnkDoH" href=""></a>
                 </p>
 
-                <h3 style="margin-top: 40px;">Mozilla Firefox Configuration</h3>
+                <h3 style="margin-top: 40px;">Set up Firefox</h3>
                 <p style="max-width: 800px; margin-right: auto; margin-left: auto;">
                     To configure Firefox, go to <b>Settings &gt; Privacy &amp; Security</b> and scroll down to find <b>DNS over HTTPS</b> section. Click on the <b>Max Protection</b> option, select <b>Custom</b> option in the <b>Choose provider</b> drop down box, and enter the encrypted DNS service URL given above.
                 </p>
                 <img class="auto-resize-img shadow-screenshot" style="margin-top: 20px; margin-bottom: 20px;" src="img/firefox-doh.png" alt="Mozilla Firefox Custom DNS-over-HTTPS Option" />
                 <p style="max-width: 800px; margin-right: auto; margin-left: auto;">
-                    Note! This will work only for Firefox and all other applications on your computer will keep using the default DNS server configured in your network settings.
+                    This setting applies to Firefox. Other applications keep using your system’s DNS settings.
                 </p>
             </div>
         </div>

@@ -245,3 +245,6 @@ ModelManifest.xml
 .fake/
 
 Other/
+
+# Python controller caches
+__pycache__/

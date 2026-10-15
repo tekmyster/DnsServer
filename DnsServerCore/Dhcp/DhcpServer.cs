@@ -65,9 +65,13 @@ namespace DnsServerCore.Dhcp
         #region variables
 
         readonly string _scopesFolder;
+        public Security.DdiSecurityManager SecurityManager { get; set; }
+        public DistributedAllocation Allocation { get; set; }
+        public Func<string, string, Task<byte[]>> BorrowCapacity { get; set; }
         readonly LogManager _log;
 
         readonly ConcurrentDictionary<IPAddress, UdpListener> _udpListeners = new ConcurrentDictionary<IPAddress, UdpListener>();
+        readonly object _udpListenerLock = new object();
 
         readonly ConcurrentDictionary<string, Scope> _scopes = new ConcurrentDictionary<string, Scope>();
 
@@ -228,9 +232,11 @@ namespace DnsServerCore.Dhcp
 
         private async Task ProcessDhcpRequestAsync(DhcpMessage request, IPEndPoint remoteEP, IPPacketInformation ipPacketInformation, Socket udpListener)
         {
+            var servingScope = FindScope(request, remoteEP.Address, ipPacketInformation);
+            if (servingScope is null || !servingScope.TryEnterServingRequest()) return;
             try
             {
-                DhcpMessage response = await ProcessDhcpMessageAsync(request, remoteEP, ipPacketInformation);
+                DhcpMessage response = await ProcessDhcpMessageCoreAsync(request, remoteEP, ipPacketInformation);
 
                 //send response
                 if (response != null)
@@ -315,9 +321,18 @@ namespace DnsServerCore.Dhcp
 
                 _log.Write(remoteEP, ex);
             }
+            finally { servingScope.ExitServingRequest(); }
         }
 
         private async Task<DhcpMessage> ProcessDhcpMessageAsync(DhcpMessage request, IPEndPoint remoteEP, IPPacketInformation ipPacketInformation)
+        {
+            var scope = FindScope(request, remoteEP.Address, ipPacketInformation);
+            if (scope is null || !scope.TryEnterServingRequest()) return null;
+            try { return await ProcessDhcpMessageCoreAsync(request, remoteEP, ipPacketInformation); }
+            finally { scope.ExitServingRequest(); }
+        }
+
+        private async Task<DhcpMessage> ProcessDhcpMessageCoreAsync(DhcpMessage request, IPEndPoint remoteEP, IPPacketInformation ipPacketInformation)
         {
             if (request.OpCode != DhcpMessageOpCode.BootRequest)
                 return null;
@@ -336,8 +351,9 @@ namespace DnsServerCore.Dhcp
                         if ((request.BootFileName != null) && (request.BootFileName != scope.BootFileName))
                             return null; //discard request; since this request wants boot file not available on this server
 
-                        if (scope.OfferDelayTime > 0)
-                            await Task.Delay(scope.OfferDelayTime); //delay sending offer
+                        int offerDelay = scope.OfferDelayTime + scope.DistributedOfferDelayMilliseconds;
+                        if (offerDelay > 0)
+                            await Task.Delay(offerDelay); //local primary, local secondary, then regional recovery preference
 
                         Lease offer = await scope.GetOfferAsync(request);
                         if (offer == null)
@@ -370,6 +386,14 @@ namespace DnsServerCore.Dhcp
                         Scope scope = FindScope(request, remoteEP.Address, ipPacketInformation);
                         if (scope == null)
                             return null; //no scope available; do nothing
+
+                        if (request.ServerIdentifier is not null)
+                        {
+                            IPAddress selectedServer = scope.InterfaceAddress.Equals(IPAddress.Any) ? ipPacketInformation.Address : scope.InterfaceAddress;
+                            if (!request.ServerIdentifier.Address.Equals(selectedServer)) { if (request.RequestedIpAddress is not null) scope.ObservePeerSelection(request); return null; }
+                        }
+                        // Other sequence owners must remain silent rather than NAK a valid peer lease.
+                        if (!scope.CanRespondToDistributedRequest(request.RequestedIpAddress?.Address ?? request.ClientIpAddress)) return null;
 
                         IPAddress serverIdentifierAddress = scope.InterfaceAddress.Equals(IPAddress.Any) ? ipPacketInformation.Address : scope.InterfaceAddress;
 
@@ -561,7 +585,7 @@ namespace DnsServerCore.Dhcp
                             return null; //the client's notion of its IP address is not correct; do nothing
 
                         //remove lease since the IP address is used by someone else
-                        scope.ReleaseLease(lease);
+                        scope.DeclineLease(lease);
 
                         //log issue
                         _log.Write(remoteEP, "DHCP Server received DECLINE message for scope '" + scope.Name + "': " + lease.GetClientInfo() + " detected that IP address [" + lease.Address + "] is already in use.");
@@ -751,6 +775,7 @@ namespace DnsServerCore.Dhcp
 
         internal void AddDnsEntries(Scope scope, Lease lease)
         {
+            if (Allocation?.Plan(scope.Name) is not null && !Allocation.HasAuthority(scope.Name, AllocationSequence.Number(lease.Address))) return;
             if (lease.Type == LeaseType.Reserved)
             {
                 string reservedLeaseHostName = lease.HostName;
@@ -771,6 +796,9 @@ namespace DnsServerCore.Dhcp
 
         internal void RemoveDnsEntries(Scope scope, Lease lease, bool force = false)
         {
+            // Old local lease objects can outlive a planned transfer. Their cleanup must not
+            // delete DNS records now maintained by the receiving owner.
+            if (Allocation?.Plan(scope.Name) is not null && !Allocation.HasAuthority(scope.Name, AllocationSequence.Number(lease.Address))) return;
             if (lease.Type == LeaseType.Reserved)
             {
                 string reservedLeaseHostName = lease.HostName;
@@ -1048,69 +1076,75 @@ namespace DnsServerCore.Dhcp
 
         private void BindUdpListener(IPEndPoint dhcpEP)
         {
-            UdpListener listener = _udpListeners.GetOrAdd(dhcpEP.Address, delegate (IPAddress key)
+            lock (_udpListenerLock)
             {
-                Socket udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
-                try
+                UdpListener listener = _udpListeners.GetOrAdd(dhcpEP.Address, delegate (IPAddress key)
                 {
-                    #region this code ignores ICMP port unreachable responses which creates SocketException in ReceiveFrom()
+                    Socket udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
-                    if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                    try
                     {
-                        const uint IOC_IN = 0x80000000;
-                        const uint IOC_VENDOR = 0x18000000;
-                        const uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
+                        #region this code ignores ICMP port unreachable responses which creates SocketException in ReceiveFrom()
 
-                        udpSocket.IOControl((IOControlCode)SIO_UDP_CONNRESET, new byte[] { Convert.ToByte(false) }, null);
+                        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                        {
+                            const uint IOC_IN = 0x80000000;
+                            const uint IOC_VENDOR = 0x18000000;
+                            const uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
+
+                            udpSocket.IOControl((IOControlCode)SIO_UDP_CONNRESET, new byte[] { Convert.ToByte(false) }, null);
+                        }
+
+                        #endregion
+
+                        //bind to interface address
+                        if (Environment.OSVersion.Platform == PlatformID.Unix)
+                            udpSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1); //to allow binding to same port with different addresses
+
+                        udpSocket.EnableBroadcast = true;
+                        udpSocket.ExclusiveAddressUse = false;
+
+                        udpSocket.Bind(dhcpEP);
+
+                        //start reading dhcp packets
+                        _ = Task.Factory.StartNew(delegate ()
+                        {
+                            return ReadUdpRequestAsync(udpSocket);
+                        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Current);
+
+                        return new UdpListener(udpSocket);
                     }
-
-                    #endregion
-
-                    //bind to interface address
-                    if (Environment.OSVersion.Platform == PlatformID.Unix)
-                        udpSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1); //to allow binding to same port with different addresses
-
-                    udpSocket.EnableBroadcast = true;
-                    udpSocket.ExclusiveAddressUse = false;
-
-                    udpSocket.Bind(dhcpEP);
-
-                    //start reading dhcp packets
-                    _ = Task.Factory.StartNew(delegate ()
+                    catch
                     {
-                        return ReadUdpRequestAsync(udpSocket);
-                    }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Current);
+                        udpSocket.Dispose();
+                        throw;
+                    }
+                });
 
-                    return new UdpListener(udpSocket);
-                }
-                catch
-                {
-                    udpSocket.Dispose();
-                    throw;
-                }
-            });
-
-            listener.IncrementScopeCount();
+                listener.IncrementScopeCount();
+            }
         }
 
         private bool UnbindUdpListener(IPEndPoint dhcpEP)
         {
-            if (_udpListeners.TryGetValue(dhcpEP.Address, out UdpListener listener))
+            lock (_udpListenerLock)
             {
-                listener.DecrementScopeCount();
-
-                if (listener.ScopeCount < 1)
+                if (_udpListeners.TryGetValue(dhcpEP.Address, out UdpListener listener))
                 {
-                    if (_udpListeners.TryRemove(dhcpEP.Address, out _))
+                    listener.DecrementScopeCount();
+
+                    if (listener.ScopeCount < 1)
                     {
-                        listener.Socket.Dispose();
-                        return true;
+                        if (_udpListeners.TryRemove(dhcpEP.Address, out _))
+                        {
+                            listener.Socket.Dispose();
+                            return true;
+                        }
                     }
                 }
-            }
 
-            return false;
+                return false;
+            }
         }
 
         private async Task<bool> ActivateScopeAsync(Scope scope, bool waitForInterface, bool throwException = false)
@@ -1119,6 +1153,7 @@ namespace DnsServerCore.Dhcp
 
             try
             {
+                if (scope.MigrationCapturing || Allocation?.BootstrapPending(scope.Name) == true) throw new InvalidOperationException("Commit the prepared ownership migration before activating DHCP.");
                 //find scope interface for binding socket
                 if (waitForInterface)
                 {
@@ -1259,6 +1294,7 @@ namespace DnsServerCore.Dhcp
 
         private async Task LoadScopeAsync(Scope scope, bool waitForInterface)
         {
+            scope.RecoverNativeLeases(Allocation);
             foreach (KeyValuePair<string, Scope> entry in _scopes)
             {
                 Scope existingScope = entry.Value;
@@ -1416,6 +1452,24 @@ namespace DnsServerCore.Dhcp
 
         #region public
 
+        sealed class ScopeChangeBatch : IDisposable
+        {
+            readonly List<IDisposable> _changes;
+            public ScopeChangeBatch(List<IDisposable> changes) => _changes = changes;
+            public void Dispose() { foreach (var change in _changes) change.Dispose(); }
+        }
+
+        internal IDisposable BeginScopeRestore()
+        {
+            var changes = new List<IDisposable>();
+            try
+            {
+                foreach (var scope in _scopes.Values) changes.Add(scope.BeginAdministrativeChange());
+                return new ScopeChangeBatch(changes);
+            }
+            catch { foreach (var change in changes) change.Dispose(); throw; }
+        }
+
         public void Start()
         {
             if (_disposed)
@@ -1446,7 +1500,13 @@ namespace DnsServerCore.Dhcp
             foreach (KeyValuePair<string, Scope> scope in _scopes)
                 UnloadScope(scope.Value, false);
 
-            _udpListeners.Clear();
+            lock (_udpListenerLock)
+            {
+                foreach (UdpListener listener in _udpListeners.Values)
+                    listener.Socket.Dispose();
+
+                _udpListeners.Clear();
+            }
 
             _state = ServiceState.Stopped;
         }

@@ -42,4 +42,15 @@ foreach($mode in @('valid','connected','boot','guest','missing','identity')) {
 $script:mode='valid';$script:readback=$false;NicState $vm $saved $true
 if(!$script:observed.Connectable.Connected -or !$script:observed.Connectable.StartConnected -or !$script:observed.Connectable.AllowGuestControl){throw 'Restore does not preserve original adapter flags'}
 $passed++
-Write-Output "PASS: $passed mocked VMware adapter fencing/readback/restore checks; physical deployment remains unverified."
+$capacity=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'HasDynamicCapacity'},$true)[0]
+. ([scriptblock]::Create($capacity.Extent.Text))
+$cases=@(
+    @{plan=@{first=1;last=9;excluded=@();reservations=@()};expected=$true},
+    @{plan=@{first=1;last=9;excluded=@(@{first=1;last=9});reservations=@()};expected=$false},
+    @{plan=@{first=1;last=9;excluded=@(@{first=1;last=4},@{first=3;last=6},@{first=7;last=9});reservations=@()};expected=$false},
+    @{plan=@{first=1;last=3;excluded=@();reservations=@(@{address=1},@{address=2},@{address=3})};expected=$false},
+    @{plan=@{first=1;last=9;excluded=@(@{first=1;last=2},@{first=4;last=9});reservations=@()};expected=$true},
+    @{plan=@{first=4294967293;last=4294967295;excluded=@(@{first=0;last=4294967295});reservations=@()};expected=$false}
+)
+foreach($case in $cases){if((HasDynamicCapacity ([pscustomobject]$case.plan)) -ne $case.expected){throw 'Dynamic-capacity fence guard differs from exclusions/reservations'};$passed++}
+Write-Output "PASS: $passed mocked VMware adapter and dynamic-capacity guard checks; physical deployment remains unverified."

@@ -82,6 +82,16 @@ function Guest($node,$vm,[string]$command) {
     if($reply.ExitCode -ne 0) {throw "Root guest operation failed on pinned VM $($node.owner)"}
     return $reply.ScriptOutput
 }
+function HasDynamicCapacity($plan) {
+    [uint64]$cursor=$plan.first
+    $ranges=@($plan.excluded)+@($plan.reservations|ForEach-Object {[pscustomobject]@{first=$_.address;last=$_.address}})
+    foreach($range in @($ranges|Where-Object {$_}|Sort-Object {[uint64]$_.first})) {
+        if([uint64]$range.last -lt $cursor -or [uint64]$range.first -gt [uint64]$plan.last){continue}
+        if([uint64]$range.first -gt $cursor){return $true}
+        $cursor=[Math]::Max($cursor,([uint64]$range.last+1))
+    }
+    return $cursor -le [uint64]$plan.last
+}
 function Recover($failed,$survivors,[string]$scope,[string]$demand) {
     $operationPath=Join-Path $directory ($failed.owner+'-'+([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($scope))))+'.json')
     $operation=if(Test-Path -LiteralPath $operationPath){Get-Content -LiteralPath $operationPath -Raw|ConvertFrom-Json}else{$null}
@@ -210,6 +220,9 @@ try {
         foreach($node in $live) {
             foreach($status in @($states[$node.owner].scopeStatus|Where-Object {$_.enabled -and $_.overflowRequestedUtc})) {
                 $plan=@($states[$node.owner].state.plans|Where-Object scope -eq $status.scope)[0]
+                # An unreserved client cannot gain capacity from a reservation-only
+                # scope. Such demand must not cycle an otherwise recoverable VM.
+                if(!(HasDynamicCapacity $plan)){continue}
                 foreach($failed in @($offline|Where-Object owner -in $plan.owners)) {
                     $receivers=@($live|Where-Object owner -in $plan.owners)
                     foreach($receiver in $receivers) {

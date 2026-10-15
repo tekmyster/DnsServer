@@ -197,6 +197,16 @@ try {
                 $failures[$node.owner]++;if($failures[$node.owner] -ge 3){$offline+=$node}
             }
         }
+        # Once fencing/surrender has begun, finishing the saved transaction no
+        # longer depends on a client continuing to retry or its demand flag.
+        foreach($pendingFile in @(Get-ChildItem -LiteralPath $directory -Filter '*.json')) {
+            $pending=Get-Content -LiteralPath $pendingFile.FullName -Raw|ConvertFrom-Json
+            if(!$pending.phase -or $pending.phase -eq 'Completed'){continue}
+            $target=@($configuration.nodes|Where-Object owner -eq $pending.owner)
+            $receivers=@($live|Where-Object owner -in $pending.receivers)
+            if($target.Count -ne 1 -or $receivers.Count -ne $pending.receivers.Count){throw 'Pending recovery requires its original target and receivers; retain the saved fence'}
+            Recover $target[0] $receivers $pending.scope $pending.demand
+        }
         foreach($node in $live) {
             foreach($status in @($states[$node.owner].scopeStatus|Where-Object {$_.enabled -and $_.overflowRequestedUtc})) {
                 $plan=@($states[$node.owner].state.plans|Where-Object scope -eq $status.scope)[0]

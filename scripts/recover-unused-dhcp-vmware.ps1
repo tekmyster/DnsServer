@@ -167,7 +167,14 @@ PY
         $operation.phase='Imported';Save $operationPath $operation
         throw
     }
-    foreach($survivor in $survivors) {$null=Api $survivor 'settings/get' @{} $originalSessions[$survivor.owner]}
+    foreach($survivor in $survivors) {
+        try {$null=Api $survivor 'settings/get' @{} $originalSessions[$survivor.owner]}
+        catch [UnauthorizedAccessException] {
+            # A long-running controller's original token may expire naturally.
+            # Fresh source-aware read/modify already passed; never log it out or
+            # mistake expiry for an unavailable owner and start another recovery.
+        }
+    }
     $operation.phase='Completed';Save $operationPath $operation
 }
 try {
